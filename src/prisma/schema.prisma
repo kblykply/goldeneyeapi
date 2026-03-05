@@ -1,0 +1,121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  AUTHORITY
+  USER
+}
+
+enum ContractStatus {
+  DRAFT
+  SIGNED_BY_CUSTOMER
+  SIGNED_BY_SALESPERSON
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELED
+  EXPIRED
+}
+
+enum PresentationStatus {
+  CREATED
+  OTP_SENT
+  OPENED
+  ENDED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  role      Role     @default(USER)
+  level     Int      @default(1)
+  isActive  Boolean  @default(true)
+
+  fullName  String
+  phoneE164 String   @unique
+  password  String
+
+  lastSeenAt DateTime?
+
+  leaderId  String?
+  leader    User?    @relation("LeaderToDownline", fields: [leaderId], references: [id])
+  downline  User[]   @relation("LeaderToDownline")
+
+  presentations     Presentation[]
+  contractsSold     Contract[] @relation("SalespersonContracts")
+  contractsApproved Contract[] @relation("ApprovedContracts")
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  fullName  String
+  phoneE164 String   @unique
+
+  presentations Presentation[]
+  contracts      Contract[]
+}
+
+model Presentation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  status    PresentationStatus @default(CREATED)
+
+  salespersonId String
+  salesperson   User     @relation(fields: [salespersonId], references: [id])
+
+  customerId String
+  customer   Customer  @relation(fields: [customerId], references: [id])
+
+  otpHash   String?
+  otpSentAt DateTime?
+  openedAt  DateTime?
+  endedAt   DateTime?
+
+  durationSec Int @default(0)
+
+  ipAddress String?
+  userAgent String?
+}
+
+model Contract {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  status    ContractStatus @default(DRAFT)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  salespersonId String
+  salesperson   User     @relation("SalespersonContracts", fields: [salespersonId], references: [id])
+
+  approvedById String?
+  approvedBy   User?    @relation("ApprovedContracts", fields: [approvedById], references: [id])
+
+  termYears  Int    @default(20)
+  weekOfYear Int
+  resortCode String
+
+  contractJson Json
+
+  customerSignatureHash    String?
+  salespersonSignatureHash String?
+
+  approvedAt      DateTime?
+  rejectedReason  String?
+}
+

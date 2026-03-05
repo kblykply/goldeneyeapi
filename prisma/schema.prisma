@@ -1,0 +1,281 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UnitType {
+  STUDIO
+  ONE_PLUS_ONE
+  TWO_PLUS_ONE
+}
+
+enum PaymentPlan {
+  PESIN
+  ALTIN
+  TAKSIT_12
+}
+
+enum Role {
+  ADMIN
+  AUTHORITY
+  USER
+}
+
+enum ContractStatus {
+  DRAFT
+  CUSTOMER_CONFIRM_PENDING
+  CUSTOMER_CONFIRMED
+  PENDING_MANAGER_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+enum PresentationStatus {
+  CREATED
+  OTP_SENT
+  OPENED
+  ENDED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  role     Role    @default(USER)
+  level    Int     @default(1)
+  isActive Boolean @default(true)
+
+  fullName  String
+  phoneE164 String @unique
+  password  String
+
+  lastSeenAt DateTime?
+  avatarUrl  String?
+
+  leaderId String?
+  leader   User?   @relation("LeaderToDownline", fields: [leaderId], references: [id])
+  downline User[]  @relation("LeaderToDownline")
+
+  presentations Presentation[]
+
+  // salesperson -> contracts
+  contractsSold Contract[] @relation("SalespersonContracts")
+
+  // ✅ approvedBy -> contracts (OPPOSITE: Contract.approvedBy)
+  contractsApproved Contract[] @relation("ApprovedContracts")
+
+  // ✅ manager approvals (OPPOSITE: Contract.manager)
+  contractsManaged Contract[] @relation("ManagerContracts")
+
+  // audit actor
+  auditLogs AuditLog[] @relation("AuditActor")
+
+  commissions  Commission[]
+  inviteTokens InviteToken[] @relation("InviterToInvites")
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  fullName  String
+  phoneE164 String @unique
+
+  presentations Presentation[]
+  contracts     Contract[]
+}
+
+model Presentation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  status PresentationStatus @default(CREATED)
+
+  salespersonId String
+  salesperson   User   @relation(fields: [salespersonId], references: [id])
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  otpHash   String?
+  otpSentAt DateTime?
+  openedAt  DateTime?
+  endedAt   DateTime?
+
+  durationSec Int @default(0)
+
+  ipAddress String?
+  userAgent String?
+
+  auditLogs AuditLog[] @relation("AuditPresentation")
+
+  // Wizard state
+  step           Int     @default(1)
+  videoCompleted Boolean @default(false)
+
+  unitType    UnitType?
+  weekOfYear  Int?
+  paymentPlan PaymentPlan?
+  priceCents  Int?
+
+  // ✅ OPPOSITE for Contract.presentation
+  contracts Contract[] @relation("PresentationContracts")
+}
+
+model Commission {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id])
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  level       Int
+  rate        Float // payout delta rate e.g. 0.16 / 0.02
+  amountCents Int
+
+  status CommissionStatus @default(PENDING)
+
+  @@index([contractId])
+  @@index([userId])
+}
+
+enum CommissionStatus {
+  PENDING
+  PAYABLE
+  PAID
+}
+
+model Contract {
+  id        String         @id @default(cuid())
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  status    ContractStatus @default(DRAFT)
+
+  // relations
+  presentationId String?
+  presentation   Presentation? @relation("PresentationContracts", fields: [presentationId], references: [id])
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  salespersonId String
+  salesperson   User   @relation("SalespersonContracts", fields: [salespersonId], references: [id])
+
+  // ✅ approvedBy (fixes contractsApproved error)
+  approvedById String?
+  approvedBy   User?   @relation("ApprovedContracts", fields: [approvedById], references: [id])
+
+  managerId String?
+  manager   User?   @relation("ManagerContracts", fields: [managerId], references: [id])
+
+  // pricing snapshot
+  unitType    UnitType
+  weekOfYear  Int
+  paymentPlan PaymentPlan
+  priceCents  Int
+
+  // OTP
+  customerOtpHash     String?
+  customerOtpSentAt   DateTime?
+  customerConfirmedAt DateTime?
+
+  rejectedReason String?
+
+  // ✅ OPPOSITE for AuditLog.contract
+  auditLogs AuditLog[] @relation("AuditContract")
+
+  commissions Commission[]
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  actorId String?
+  actor   User?   @relation("AuditActor", fields: [actorId], references: [id])
+
+  entityType String
+  entityId   String
+  action     String
+  meta       Json?
+
+  ipAddress String?
+  userAgent String?
+
+  presentationId String?
+  presentation   Presentation? @relation("AuditPresentation", fields: [presentationId], references: [id])
+
+  contractId String?
+  contract   Contract? @relation("AuditContract", fields: [contractId], references: [id])
+}
+
+model WeekPrice {
+  id         String   @id @default(cuid())
+  unitType   UnitType
+  weekOfYear Int
+
+  // ✅ date range text from excel (e.g. "1 Kasım - 8 Kasım")
+  periodText String
+
+  pesinCents    Int
+  taksit6Cents  Int
+  taksit12Cents Int
+
+  @@unique([unitType, weekOfYear])
+  @@index([unitType])
+  @@index([weekOfYear])
+}
+
+enum OtpPurpose {
+  LOGIN
+  PRESENTATION_OPEN
+  CONTRACT_CONFIRM
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  phoneE164 String
+  purpose   OtpPurpose
+
+  otpHash    String
+  attempts   Int       @default(0)
+  consumedAt DateTime?
+
+  meta Json?
+
+  @@index([phoneE164, purpose])
+  @@index([expiresAt])
+}
+
+model InviteToken {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  token String @unique
+
+  inviterId String
+  inviter   User   @relation("InviterToInvites", fields: [inviterId], references: [id])
+
+  targetLevel Int
+  maxUses     Int       @default(3)
+  usedCount   Int       @default(0)
+  revokedAt   DateTime?
+
+  note String?
+
+  @@index([inviterId])
+  @@index([expiresAt])
+}
