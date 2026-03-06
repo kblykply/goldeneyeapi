@@ -9,7 +9,7 @@ async function bootstrap() {
 
   // Allow requests from Next.js dev server
   app.enableCors({
-    origin: "http://localhost:3000",
+    origin: ["http://localhost:3000", "https://goldeneyefront-cjr3.vercel.app"],
     credentials: true,
   });
 
