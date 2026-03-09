@@ -8,6 +8,9 @@ const RATE_BY_LEVEL: Record<number, number> = {
   3: 0.20,
 };
 
+// REGIONAL_MANAGER absolute rate (top of chain)
+const RM_RATE = 0.22;
+
 @Injectable()
 export class CommissionService {
   constructor(private prisma: PrismaService) {}
@@ -15,6 +18,12 @@ export class CommissionService {
   /**
    * Call after Contract becomes APPROVED.
    * Idempotent per contract: if commissions already exist, it does nothing.
+   *
+   * Chain walks up from salesperson → leader → ... stopping at ADMIN.
+   * Delta rates:
+   *   L1 sells: L1=16%, L2=2%, L3=2%, RM=2%  → total 22%
+   *   L2 sells: L2=18%, L3=2%, RM=2%          → total 22%
+   *   L3 sells: L3=20%, RM=2%                 → total 22%
    */
   async calculateForApprovedContract(contractId: string) {
     const existing = await this.prisma.commission.count({
@@ -48,20 +57,27 @@ export class CommissionService {
 
       const u = await this.prisma.user.findUnique({
         where: { id: currentUserId },
-        select: { id: true, level: true, leaderId: true },
+        select: { id: true, role: true, level: true, leaderId: true },
       });
 
       if (!u) break;
 
-      // ✅ Clamp: any level >= 3 uses level 3 rate (max tier)
-      const effectiveLevel = u.level >= 3 ? 3 : u.level;
+      // ADMIN komisyon almaz, zincir durur
+      if (u.role === "ADMIN") break;
 
-      const absoluteRate = RATE_BY_LEVEL[effectiveLevel];
+      let absoluteRate: number;
+      let effectiveLevel: number;
 
-      // If for some reason still no rate, skip upward (do NOT break)
-      if (!absoluteRate) {
-        currentUserId = u.leaderId ?? null;
-        continue;
+      if (u.role === "REGIONAL_MANAGER") {
+        absoluteRate = RM_RATE; // %22
+        effectiveLevel = 4;     // RM'yi level 4 olarak sakla
+      } else {
+        effectiveLevel = u.level >= 3 ? 3 : u.level;
+        absoluteRate = RATE_BY_LEVEL[effectiveLevel];
+        if (!absoluteRate) {
+          currentUserId = u.leaderId ?? null;
+          continue;
+        }
       }
 
       const deltaRate = absoluteRate - lastPaidAbsoluteRate;
@@ -73,7 +89,7 @@ export class CommissionService {
           data: {
             contractId: contract.id,
             userId: u.id,
-            level: effectiveLevel, // store effective level (1/2/3)
+            level: effectiveLevel,
             rate: deltaRate,
             amountCents,
             status: "PENDING",
@@ -82,6 +98,9 @@ export class CommissionService {
 
         lastPaidAbsoluteRate = absoluteRate;
       }
+
+      // RM'den sonra zincir durur (ADMIN komisyon almaz zaten)
+      if (u.role === "REGIONAL_MANAGER") break;
 
       currentUserId = u.leaderId ?? null;
     }

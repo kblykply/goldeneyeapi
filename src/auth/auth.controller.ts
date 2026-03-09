@@ -48,15 +48,27 @@ export class AuthController {
 
     // enforce chain rule again (safety)
     const inviter = inv.inviter;
-    const allowedTarget =
-      inviter.role === "ADMIN" ? 3 : inviter.level === 3 ? 2 : inviter.level === 2 ? 1 : 0;
 
-    if (inv.targetLevel !== allowedTarget) {
-      return { ok: false, message: "Bu davet kural dışı (hedef seviye uyuşmuyor)" };
+    if (inv.targetRole) {
+      // RM daveti: sadece ADMIN oluşturabilir
+      if (inviter.role !== "ADMIN") {
+        return { ok: false, message: "Bu davet kural dışı (sadece admin RM daveti oluşturabilir)" };
+      }
+    } else {
+      const allowedTarget =
+        inviter.role === "ADMIN" ? 3
+        : inviter.role === "REGIONAL_MANAGER" ? 3
+        : inviter.level === 3 ? 2
+        : inviter.level === 2 ? 1
+        : 0;
+
+      if (inv.targetLevel !== allowedTarget) {
+        return { ok: false, message: "Bu davet kural dışı (hedef seviye uyuşmuyor)" };
+      }
     }
 
-    // 3 kuralı (inviter için)
-    if (inviter.role !== "ADMIN") {
+    // 3 kuralı: ADMIN ve REGIONAL_MANAGER için uygulanmaz
+    if (inviter.role !== "ADMIN" && inviter.role !== "REGIONAL_MANAGER") {
       const direct = await this.prisma.user.count({ where: { leaderId: inviter.id } });
       if (direct >= 3) return { ok: false, message: "Bu liderin ekibi dolu (3 kişi)" };
     }
@@ -71,9 +83,9 @@ export class AuthController {
           fullName: body.fullName,
           phoneE164: body.phoneE164,
           password: body.password, // V1: plain. (V2: hash)
-          role: "USER",
-          level: inv.targetLevel,
-          leaderId: inviter.id, // ✅ critical: link owner becomes leader
+          role: (inv.targetRole as any) ?? "USER",
+          level: inv.targetRole ? 0 : (inv.targetLevel ?? 1),
+          leaderId: inviter.id,
           isActive: true,
         },
         select: {

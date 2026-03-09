@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Req, UseGuards } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
@@ -6,6 +6,7 @@ import { Request } from "express";
 import { IsString } from "class-validator";
 import * as crypto from "crypto";
 import { CommissionService } from "../commissions/commission.service";
+import { TeamService } from "../team/team.service";
 
 function hashOtp(otp: string) {
   return crypto.createHash("sha256").update(otp).digest("hex");
@@ -29,7 +30,8 @@ class RejectDto {
 export class ContractsController {
   constructor(
     private prisma: PrismaService,
-    private commissions: CommissionService // ✅ inject
+    private commissions: CommissionService,
+    private team: TeamService
   ) {}
 
   /**
@@ -260,6 +262,11 @@ export class ContractsController {
 
     if (me.role === "ADMIN" || me.role === "AUTHORITY") return { ok: true, contract: c };
     if (c.salespersonId === me.id) return { ok: true, contract: c };
+
+    if (me.role === "REGIONAL_MANAGER") {
+      const subtree = await this.team.getSubtreeIds(me.id);
+      if (subtree.has(c.salespersonId)) return { ok: true, contract: c };
+    }
 
     return { ok: false, message: "Yetkisiz" };
   }

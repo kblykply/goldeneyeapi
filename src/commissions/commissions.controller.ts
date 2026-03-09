@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { Controller, Get, Param, Post, Query, Req, UseGuards } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
@@ -56,9 +56,14 @@ export class CommissionsController {
   ) {
     const me = req.user;
 
-    // Only leader-ish users (level >= 2) OR admin/authority can view team
-    if (me.role !== "ADMIN" && me.role !== "AUTHORITY" && me.level < 2) {
-      return { ok: false, message: "Yetkisiz (Leader L2+ veya Admin/Authority)" };
+    // Only leader-ish users (level >= 2), REGIONAL_MANAGER, ADMIN, or AUTHORITY can view team
+    if (
+      me.role !== "ADMIN" &&
+      me.role !== "AUTHORITY" &&
+      me.role !== "REGIONAL_MANAGER" &&
+      me.level < 2
+    ) {
+      return { ok: false, message: "Yetkisiz (Leader L2+ veya Admin/Authority/RM)" };
     }
 
     const st = ALLOWED_STATUS.has(status ?? "") ? (status as any) : undefined;

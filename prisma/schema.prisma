@@ -21,6 +21,7 @@ enum PaymentPlan {
 
 enum Role {
   ADMIN
+  REGIONAL_MANAGER
   AUTHORITY
   USER
 }
@@ -269,7 +270,8 @@ model InviteToken {
   inviterId String
   inviter   User   @relation("InviterToInvites", fields: [inviterId], references: [id])
 
-  targetLevel Int
+  targetLevel Int?
+  targetRole  Role?
   maxUses     Int       @default(3)
   usedCount   Int       @default(0)
   revokedAt   DateTime?
