@@ -1,10 +1,10 @@
 import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { OtpService } from "../otp/otp.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
-import * as crypto from "crypto";
 
 class StartPresentationDto {
   @IsString()
@@ -54,13 +54,6 @@ class UpdatePresentationDto {
   paymentPlan?: "PESIN" | "ALTIN" | "TAKSIT_12";
 }
 
-function hashOtp(otp: string) {
-  return crypto.createHash("sha256").update(otp).digest("hex");
-}
-function generateOtp() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
 // ✅ price column mapping
 function priceFromWeekPriceRow(
   row: { pesinCents: number; taksit6Cents: number; taksit12Cents: number },
@@ -74,7 +67,10 @@ function priceFromWeekPriceRow(
 @Controller("presentations")
 @UseGuards(AuthGuard)
 export class PresentationsController {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private otp: OtpService,
+  ) {}
 
   @Post("start")
   async start(
@@ -89,14 +85,11 @@ export class PresentationsController {
       create: { fullName: body.customerFullName, phoneE164: body.customerPhoneE164 },
     });
 
-    const otp = generateOtp();
-
     const pres = await this.prisma.presentation.create({
       data: {
         status: "OTP_SENT",
         salespersonId: me.id,
         customerId: customer.id,
-        otpHash: hashOtp(otp),
         otpSentAt: new Date(),
         ipAddress: req.ip,
         userAgent: String(req.headers["user-agent"] || ""),
@@ -104,10 +97,21 @@ export class PresentationsController {
       select: { id: true, status: true },
     });
 
+    const result = await this.otp.requestOtp({
+      phoneE164: body.customerPhoneE164,
+      purpose: "PRESENTATION_OPEN",
+      message: (code) => `Sunum doğrulama kodunuz: ${code}`,
+      meta: { presentationId: pres.id },
+    });
+
+    if (!result.ok) {
+      return { ok: false, message: "OTP gönderilemedi." };
+    }
+
     return {
+      ok: true,
       presentationId: pres.id,
       status: pres.status,
-      devOtp: otp,
       customer: { fullName: customer.fullName, phoneE164: customer.phoneE164 },
     };
   }
@@ -121,15 +125,21 @@ export class PresentationsController {
 
     const pres = await this.prisma.presentation.findUnique({
       where: { id: body.presentationId },
-      select: { id: true, otpHash: true, salespersonId: true },
+      select: { id: true, salespersonId: true, customer: { select: { phoneE164: true } } },
     });
 
     if (!pres || pres.salespersonId !== me.id) {
       return { ok: false, message: "Sunum bulunamadı" };
     }
 
-    if (!pres.otpHash || hashOtp(body.otp) !== pres.otpHash) {
-      return { ok: false, message: "OTP hatalı" };
+    const result = await this.otp.verifyOtp({
+      phoneE164: pres.customer.phoneE164,
+      purpose: "PRESENTATION_OPEN",
+      otp: body.otp,
+    });
+
+    if (!result.ok) {
+      return { ok: false, message: result.message };
     }
 
     const updated = await this.prisma.presentation.update({
