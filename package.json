@@ -12,6 +12,7 @@
     "seed": "ts-node src/seed.ts",
     "seed:week-prices": "ts-node src/scripts/seed-week-prices.ts",
     "export:week-prices": "ts-node src/scripts/export-week-prices.ts",
+    "seed:exchange-rates": "ts-node src/scripts/seed-exchange-rates.ts",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
