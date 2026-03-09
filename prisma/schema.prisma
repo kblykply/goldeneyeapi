@@ -236,6 +236,16 @@ model WeekPrice {
   @@index([weekOfYear])
 }
 
+model ExchangeRate {
+  id           String   @id @default(cuid())
+  fromCurrency String   // base: "GBP"
+  toCurrency   String   // "GBP" | "EUR" | "USD" | "TRY"
+  rate         Decimal  @db.Decimal(18, 6)
+  updatedAt    DateTime @updatedAt
+
+  @@unique([fromCurrency, toCurrency])
+}
+
 enum OtpPurpose {
   LOGIN
   PRESENTATION_OPEN

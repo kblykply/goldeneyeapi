@@ -1,10 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { OtpService } from "../otp/otp.service";
+import { CurrencyService } from "../currency/currency.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
+
+const SUPPORTED_CURRENCIES = ["GBP", "EUR", "USD", "TRY"] as const;
+type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 
 class StartPresentationDto {
   @IsString()
@@ -70,6 +74,7 @@ export class PresentationsController {
   constructor(
     private prisma: PrismaService,
     private otp: OtpService,
+    private currency: CurrencyService,
   ) {}
 
   @Post("start")
@@ -158,7 +163,8 @@ export class PresentationsController {
   @Get(":id")
   async getOne(
     @Param("id") id: string,
-    @Req() req: Request & { user: AuthedUser }
+    @Req() req: Request & { user: AuthedUser },
+    @Query("currency") currencyParam?: string,
   ) {
     const me = req.user;
 
@@ -173,7 +179,11 @@ export class PresentationsController {
       return { ok: false, message: "Sunum bulunamadı" };
     }
 
-    // ✅ optional: also fetch periodText for UI
+    const targetCurrency: SupportedCurrency =
+      SUPPORTED_CURRENCIES.includes(currencyParam as SupportedCurrency)
+        ? (currencyParam as SupportedCurrency)
+        : "GBP";
+
     let periodText: string | null = null;
     if (pres.unitType && pres.weekOfYear) {
       const row = await this.prisma.weekPrice.findUnique({
@@ -182,6 +192,11 @@ export class PresentationsController {
       });
       periodText = row?.periodText ?? null;
     }
+
+    const price =
+      pres.priceCents != null
+        ? await this.currency.convertFromGbpPence(pres.priceCents, targetCurrency)
+        : null;
 
     return {
       ok: true,
@@ -193,8 +208,9 @@ export class PresentationsController {
         unitType: pres.unitType,
         weekOfYear: pres.weekOfYear,
         paymentPlan: pres.paymentPlan,
-        priceCents: pres.priceCents,
-        periodText, // ✅
+        price,
+        currency: targetCurrency,
+        periodText,
         customer: pres.customer,
       },
     };
@@ -204,7 +220,8 @@ export class PresentationsController {
   async updateOne(
     @Param("id") id: string,
     @Body() body: UpdatePresentationDto,
-    @Req() req: Request & { user: AuthedUser }
+    @Req() req: Request & { user: AuthedUser },
+    @Query("currency") currencyParam?: string,
   ) {
     const me = req.user;
 
@@ -228,6 +245,11 @@ export class PresentationsController {
       weekOfYear: (body.weekOfYear ?? existing.weekOfYear) as number | null,
       paymentPlan: (body.paymentPlan ?? existing.paymentPlan) as any as ("PESIN" | "ALTIN" | "TAKSIT_12" | null),
     };
+
+    const targetCurrency: SupportedCurrency =
+      SUPPORTED_CURRENCIES.includes(currencyParam as SupportedCurrency)
+        ? (currencyParam as SupportedCurrency)
+        : "GBP";
 
     // ✅ price + periodText from DB
     let priceCents: number | null = null;
@@ -255,11 +277,15 @@ export class PresentationsController {
         unitType: body.unitType ?? undefined,
         weekOfYear: body.weekOfYear ?? undefined,
         paymentPlan: body.paymentPlan ?? undefined,
-        // ✅ Always set when computable, else clear it
         priceCents: priceCents ?? null,
       },
       include: { customer: { select: { fullName: true, phoneE164: true } } },
     });
+
+    const price =
+      updated.priceCents != null
+        ? await this.currency.convertFromGbpPence(updated.priceCents, targetCurrency)
+        : null;
 
     return {
       ok: true,
@@ -271,8 +297,9 @@ export class PresentationsController {
         unitType: updated.unitType,
         weekOfYear: updated.weekOfYear,
         paymentPlan: updated.paymentPlan,
-        priceCents: updated.priceCents,
-        periodText, // ✅ for UI
+        price,
+        currency: targetCurrency,
+        periodText,
         customer: updated.customer,
       },
     };

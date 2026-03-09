@@ -16,6 +16,7 @@ import { CommissionsModule } from "./commissions/commissions.module";
 import { SmsModule } from "./sms/sms.module";
 
 import { InvitesModule } from "./invites/invites.module";
+import { CurrencyModule } from "./currency/currency.module";
 
 @Module({
   imports: [
@@ -32,7 +33,7 @@ import { InvitesModule } from "./invites/invites.module";
     CommissionsModule,
         SmsModule,
         InvitesModule,
-
+    CurrencyModule,
   ],
   controllers: [AppController],
   providers: [AppService],
