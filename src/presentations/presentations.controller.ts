@@ -121,6 +121,44 @@ export class PresentationsController {
     };
   }
 
+  @Post("admin/start-skip-otp")
+  async adminStartSkipOtp(
+    @Body() body: StartPresentationDto,
+    @Req() req: Request & { user: AuthedUser }
+  ) {
+    const me = req.user;
+
+    if (me.role !== "ADMIN") {
+      return { ok: false, message: "Yetkisiz işlem" };
+    }
+
+    const customer = await this.prisma.customer.upsert({
+      where: { phoneE164: body.customerPhoneE164 },
+      update: { fullName: body.customerFullName },
+      create: { fullName: body.customerFullName, phoneE164: body.customerPhoneE164 },
+    });
+
+    const pres = await this.prisma.presentation.create({
+      data: {
+        status: "OPENED",
+        salespersonId: me.id,
+        customerId: customer.id,
+        openedAt: new Date(),
+        step: 1,
+        ipAddress: req.ip,
+        userAgent: String(req.headers["user-agent"] || ""),
+      },
+      select: { id: true, status: true },
+    });
+
+    return {
+      ok: true,
+      presentationId: pres.id,
+      status: pres.status,
+      customer: { fullName: customer.fullName, phoneE164: customer.phoneE164 },
+    };
+  }
+
   @Post("verify-otp")
   async verify(
     @Body() body: VerifyOtpDto,
