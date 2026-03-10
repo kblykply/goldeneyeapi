@@ -17,6 +17,7 @@ import { SmsModule } from "./sms/sms.module";
 
 import { InvitesModule } from "./invites/invites.module";
 import { CurrencyModule } from "./currency/currency.module";
+import { WeekPricesModule } from "./week-prices/week-prices.module";
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { CurrencyModule } from "./currency/currency.module";
         SmsModule,
         InvitesModule,
     CurrencyModule,
+    WeekPricesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

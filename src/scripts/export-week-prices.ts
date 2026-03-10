@@ -1,4 +1,4 @@
-import { PrismaClient, UnitType } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -19,7 +19,7 @@ async function main() {
     orderBy: [{ unitType: "asc" }, { weekOfYear: "asc" }],
   });
 
-  const byType = (type: UnitType) => all.filter((r) => r.unitType === type);
+  const byType = (type: "STUDIO" | "ONE_PLUS_ONE" | "TWO_PLUS_ONE") => all.filter((r) => r.unitType === type);
 
   const studio = byType("STUDIO");
   const onePlusOne = byType("ONE_PLUS_ONE");
