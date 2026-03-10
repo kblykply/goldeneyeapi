@@ -9,6 +9,7 @@ import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from 
 
 const SUPPORTED_CURRENCIES = ["GBP", "EUR", "USD", "TRY"] as const;
 type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
+const SALES_SKIP_OTP_ALLOWED_USER_IDS = new Set(["cmmkch0iz0003ob2pmvz0qqd4"]);
 
 class StartPresentationDto {
   @IsString()
@@ -128,7 +129,8 @@ export class PresentationsController {
   ) {
     const me = req.user;
 
-    if (me.role !== "ADMIN") {
+    const canSkipOtp = me.role === "ADMIN" || SALES_SKIP_OTP_ALLOWED_USER_IDS.has(me.id);
+    if (!canSkipOtp) {
       return { ok: false, message: "Yetkisiz işlem" };
     }
 

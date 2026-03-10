@@ -1,6 +1,7 @@
 import { Body, Controller, Post, UnauthorizedException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { IsString, Matches, MinLength } from "class-validator";
+import * as bcrypt from "bcrypt";
 
 class LoginDto {
   @IsString()
@@ -82,7 +83,7 @@ export class AuthController {
         data: {
           fullName: body.fullName,
           phoneE164: body.phoneE164,
-          password: body.password, // V1: plain. (V2: hash)
+          password: await bcrypt.hash(body.password, 10),
           role: (inv.targetRole as any) ?? "USER",
           level: inv.targetRole ? 0 : (inv.targetLevel ?? 1),
           leaderId: inviter.id,
@@ -116,9 +117,22 @@ export class AuthController {
       where: { phoneE164: body.phoneE164 },
     });
 
-    if (!user || user.password !== body.password) {
-      throw new UnauthorizedException("Invalid credentials");
+    if (!user) throw new UnauthorizedException("Invalid credentials");
+
+    // Lazy migration: plain text şifreyse hash'e çevir
+    const isHashed = user.password.startsWith("$2b$") || user.password.startsWith("$2a$");
+    let passwordMatch: boolean;
+    if (isHashed) {
+      passwordMatch = await bcrypt.compare(body.password, user.password);
+    } else {
+      passwordMatch = user.password === body.password;
+      if (passwordMatch) {
+        const hashed = await bcrypt.hash(body.password, 10);
+        await this.prisma.user.update({ where: { id: user.id }, data: { password: hashed } });
+      }
     }
+
+    if (!passwordMatch) throw new UnauthorizedException("Invalid credentials");
 
     // DEV token format
     const accessToken = `dev:${user.id}`;
