@@ -3,7 +3,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
-import { IsString } from "class-validator";
+import { IsString, IsArray, IsOptional, IsDateString, IsInt, Min, ValidateNested } from "class-validator";
+import { Type } from "class-transformer";
 import * as crypto from "crypto";
 import { CommissionService } from "../commissions/commission.service";
 import { TeamService } from "../team/team.service";
@@ -25,6 +26,27 @@ class RejectDto {
   reason!: string;
 }
 
+class CreateInstallmentDto {
+  @IsDateString()
+  dueDate!: string;
+
+  @IsInt()
+  @Min(1)
+  amountCents!: number;
+
+  @IsString()
+  @IsOptional()
+  label?: string;
+}
+
+class CreateContractFromPresentationDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateInstallmentDto)
+  @IsOptional()
+  installments?: CreateInstallmentDto[];
+}
+
 @Controller("contracts")
 @UseGuards(AuthGuard)
 export class ContractsController {
@@ -41,6 +63,7 @@ export class ContractsController {
   @Post("from-presentation/:presentationId")
   async createFromPresentation(
     @Param("presentationId") presentationId: string,
+    @Body() body: CreateContractFromPresentationDto,
     @Req() req: Request & { user: AuthedUser }
   ) {
     const me = req.user;
@@ -65,18 +88,40 @@ export class ContractsController {
 
     if (existing) return { ok: true, contractId: existing.id, alreadyExists: true };
 
-    const c = await this.prisma.contract.create({
-      data: {
-        status: "DRAFT",
-        presentationId: pres.id,
-        customerId: pres.customerId,
-        salespersonId: pres.salespersonId,
-        unitType: pres.unitType,
-        weekOfYear: pres.weekOfYear,
-        paymentPlan: pres.paymentPlan,
-        priceCents: pres.priceCents,
-      },
-      select: { id: true },
+    const installments = body.installments ?? [];
+
+    const c = await this.prisma.$transaction(async (tx) => {
+      const contract = await tx.contract.create({
+        data: {
+          status: "DRAFT",
+          presentationId: pres.id,
+          customerId: pres.customerId,
+          salespersonId: pres.salespersonId,
+          unitType: pres.unitType!,
+          weekOfYear: pres.weekOfYear!,
+          paymentPlan: pres.paymentPlan!,
+          priceCents: pres.priceCents!,
+        },
+        select: { id: true },
+      });
+
+      if (installments.length > 0) {
+        await tx.customPaymentPlan.create({
+          data: {
+            contractId: contract.id,
+            totalCents: pres.priceCents!,
+            installments: {
+              create: installments.map((inst) => ({
+                dueDate: new Date(inst.dueDate),
+                amountCents: inst.amountCents,
+                label: inst.label,
+              })),
+            },
+          },
+        });
+      }
+
+      return contract;
     });
 
     return { ok: true, contractId: c.id };

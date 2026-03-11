@@ -194,7 +194,37 @@ model Contract {
   // ✅ OPPOSITE for AuditLog.contract
   auditLogs AuditLog[] @relation("AuditContract")
 
-  commissions Commission[]
+  commissions       Commission[]
+  customPaymentPlan CustomPaymentPlan?
+}
+
+model CustomPaymentPlan {
+  id         String   @id @default(cuid())
+  contractId String   @unique
+  contract   Contract @relation(fields: [contractId], references: [id])
+  totalCents Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  installments CustomPaymentInstallment[]
+
+  @@map("custom_payment_plans")
+}
+
+model CustomPaymentInstallment {
+  id          String            @id @default(cuid())
+  planId      String
+  plan        CustomPaymentPlan @relation(fields: [planId], references: [id])
+  dueDate     DateTime
+  amountCents Int
+  label       String?
+  isPaid      Boolean           @default(false)
+  paidAt      DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([planId])
+  @@map("custom_payment_installments")
 }
 
 model AuditLog {
