@@ -191,6 +191,12 @@ model Contract {
 
   rejectedReason String?
 
+  // Customer details snapshot (collected before OTP)
+  nationality    String?
+  passportNumber String?
+  email          String?
+  address        String?
+
   // ✅ OPPOSITE for AuditLog.contract
   auditLogs AuditLog[] @relation("AuditContract")
 

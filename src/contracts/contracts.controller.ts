@@ -3,7 +3,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
-import { IsString, IsArray, IsOptional, IsDateString, IsInt, Min, ValidateNested } from "class-validator";
+import { IsString, IsArray, IsOptional, IsDateString, IsInt, Min, ValidateNested, IsEmail } from "class-validator";
 import { Type } from "class-transformer";
 import * as crypto from "crypto";
 import { CommissionService } from "../commissions/commission.service";
@@ -45,6 +45,22 @@ class CreateContractFromPresentationDto {
   @Type(() => CreateInstallmentDto)
   @IsOptional()
   installments?: CreateInstallmentDto[];
+
+  @IsOptional()
+  @IsString()
+  nationality?: string;
+
+  @IsOptional()
+  @IsString()
+  passportNumber?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  address?: string;
 }
 
 @Controller("contracts")
@@ -101,6 +117,10 @@ export class ContractsController {
           weekOfYear: pres.weekOfYear!,
           paymentPlan: pres.paymentPlan!,
           basePriceCents: pres.basePriceCents!,
+          nationality: body.nationality,
+          passportNumber: body.passportNumber,
+          email: body.email,
+          address: body.address,
         },
         select: { id: true },
       });
