@@ -14,17 +14,17 @@ class UpdateWeekPriceDto {
   @IsOptional()
   @IsInt()
   @Min(0)
-  pesinCents?: number;
+  cashCents?: number;
 
   @IsOptional()
   @IsInt()
   @Min(0)
-  taksit6Cents?: number;
+  installment6Cents?: number;
 
   @IsOptional()
   @IsInt()
   @Min(0)
-  taksit12Cents?: number;
+  installment12Cents?: number;
 }
 
 class BulkUpdateItemDto {

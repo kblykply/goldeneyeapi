@@ -10,7 +10,7 @@ export class CurrencyController {
   @Get("rates")
   async getRates() {
     const rates = await this.currencyService.getRates();
-    return { ok: true, base: "GBP", rates };
+    return { ok: true, base: "EUR", rates };
   }
 
   @Post("refresh")

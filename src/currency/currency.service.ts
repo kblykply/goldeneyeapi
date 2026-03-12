@@ -3,7 +3,7 @@ import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../prisma/prisma.service";
 
 const SUPPORTED: string[] = ["GBP", "EUR", "USD", "TRY"];
-const BASE = "GBP";
+const BASE = "EUR";
 const API_URL = `https://open.er-api.com/v6/latest/${BASE}`;
 
 @Injectable()
@@ -59,9 +59,9 @@ export class CurrencyService {
     }));
   }
 
-  /** Convert GBP pence → target currency amount (2 decimal places) */
-  async convertFromGbpPence(pricePence: number, toCurrency: string): Promise<number> {
-    if (toCurrency === BASE) return Math.round(pricePence) / 100;
+  /** Convert base-currency cents -> target currency amount (2 decimal places) */
+  async convertFromBaseCents(baseCents: number, toCurrency: string): Promise<number> {
+    if (toCurrency === BASE) return Math.round(baseCents) / 100;
 
     const row = await this.prisma.exchangeRate.findUnique({
       where: { fromCurrency_toCurrency: { fromCurrency: BASE, toCurrency } },
@@ -69,7 +69,7 @@ export class CurrencyService {
 
     if (!row) throw new Error(`No exchange rate found for ${BASE} → ${toCurrency}`);
 
-    const gbp = pricePence / 100;
-    return Math.round(gbp * Number(row.rate) * 100) / 100;
+    const baseAmount = baseCents / 100;
+    return Math.round(baseAmount * Number(row.rate) * 100) / 100;
   }
 }

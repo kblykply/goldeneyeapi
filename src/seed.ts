@@ -156,7 +156,7 @@ async function main() {
         unitType: "STUDIO",
         weekOfYear: 12,
         paymentPlan: "ALTIN",
-        priceCents: 2500000,
+        basePriceCents: 2500000,
 
         presentationId: null,
         approvedById: null,

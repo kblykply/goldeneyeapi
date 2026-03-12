@@ -14,6 +14,8 @@
     "seed:week-prices": "ts-node src/scripts/seed-week-prices.ts",
     "export:week-prices": "ts-node src/scripts/export-week-prices.ts",
     "seed:exchange-rates": "ts-node src/scripts/seed-exchange-rates.ts",
+    "migrate:eur-base": "ts-node src/scripts/migrate-gbp-to-eur-base.ts",
+    "validate:eur-base": "ts-node src/scripts/validate-eur-base-migration.ts",
     "start:dev": "lsof -ti:4000 | xargs kill -9 2>/dev/null; nodemon",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",

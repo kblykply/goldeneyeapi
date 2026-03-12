@@ -123,7 +123,7 @@ model Presentation {
   unitType    UnitType?
   weekOfYear  Int?
   paymentPlan PaymentPlan?
-  priceCents  Int?
+  basePriceCents Int?
 
   // ✅ OPPOSITE for Contract.presentation
   contracts Contract[] @relation("PresentationContracts")
@@ -141,7 +141,7 @@ model Commission {
 
   level       Int
   rate        Float // payout delta rate e.g. 0.16 / 0.02
-  amountCents Int
+  baseAmountCents Int
 
   status CommissionStatus @default(PENDING)
 
@@ -182,7 +182,7 @@ model Contract {
   unitType    UnitType
   weekOfYear  Int
   paymentPlan PaymentPlan
-  priceCents  Int
+  basePriceCents Int
 
   // OTP
   customerOtpHash     String?
@@ -202,7 +202,7 @@ model CustomPaymentPlan {
   id         String   @id @default(cuid())
   contractId String   @unique
   contract   Contract @relation(fields: [contractId], references: [id])
-  totalCents Int
+  baseTotalCents Int
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -216,7 +216,7 @@ model CustomPaymentInstallment {
   planId      String
   plan        CustomPaymentPlan @relation(fields: [planId], references: [id])
   dueDate     DateTime
-  amountCents Int
+  baseAmountCents Int
   label       String?
   isPaid      Boolean           @default(false)
   paidAt      DateTime?
@@ -257,9 +257,9 @@ model WeekPrice {
   // ✅ date range text from excel (e.g. "1 Kasım - 8 Kasım")
   periodText String
 
-  pesinCents    Int
-  taksit6Cents  Int
-  taksit12Cents Int
+  cashCents          Int
+  installment6Cents  Int
+  installment12Cents Int
 
   @@unique([unitType, weekOfYear])
   @@index([unitType])
@@ -268,8 +268,8 @@ model WeekPrice {
 
 model ExchangeRate {
   id           String   @id @default(cuid())
-  fromCurrency String   // base: "GBP"
-  toCurrency   String   // "GBP" | "EUR" | "USD" | "TRY"
+  fromCurrency String   // base: "EUR"
+  toCurrency   String   // "EUR" | "GBP" | "USD" | "TRY"
   rate         Decimal  @db.Decimal(18, 6)
   updatedAt    DateTime @updatedAt
 

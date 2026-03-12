@@ -1,6 +1,11 @@
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
+const GBP_TO_EUR = 1.17;
+
+function toEurCentsFromGbp(gbpPence: number): number {
+  return Math.round(gbpPence * GBP_TO_EUR);
+}
 
 async function main() {
   const studio = [
@@ -58,7 +63,7 @@ async function main() {
     { weekOfYear: 52, periodText: "20 Aralık - 27 Aralık", taksit12Cents:  990000, taksit6Cents:  880000, pesinCents:  770000 },
   ];
 
-    // ONE_PLUS_ONE prices (GBP pence) + periodText
+  // ONE_PLUS_ONE prices (legacy GBP pence source) + periodText
   const onePlusOne = [
     { weekOfYear: 1 , periodText: "28 Aralık - 4 Ocak", taksit12Cents: 1584000, taksit6Cents: 1452000, pesinCents: 1320000 },
     { weekOfYear: 2 , periodText: "4 Ocak - 11 Ocak", taksit12Cents: 1320000, taksit6Cents: 1188000, pesinCents: 1056000 },
@@ -115,7 +120,7 @@ async function main() {
   ];
 
 
-    // TWO_PLUS_ONE prices (GBP pence) + periodText
+  // TWO_PLUS_ONE prices (legacy GBP pence source) + periodText
   const twoPlusOne = [
     { weekOfYear: 1 , periodText: "28 Aralık - 4 Ocak", taksit12Cents: 1900800, taksit6Cents: 1742400, pesinCents: 1584000 },
     { weekOfYear: 2 , periodText: "4 Ocak - 11 Ocak", taksit12Cents: 1584000, taksit6Cents: 1425600, pesinCents: 1267200 },
@@ -171,71 +176,95 @@ async function main() {
     { weekOfYear: 52, periodText: "20 Aralık - 27 Aralık", taksit12Cents: 1425600, taksit6Cents: 1267200, pesinCents: 1108800 },
   ];
 
-  for (const r of twoPlusOne) {
+  const studioEur = studio.map((r) => ({
+    weekOfYear: r.weekOfYear,
+    periodText: r.periodText,
+    cashCents: toEurCentsFromGbp(r.pesinCents),
+    installment6Cents: toEurCentsFromGbp(r.taksit6Cents),
+    installment12Cents: toEurCentsFromGbp(r.taksit12Cents),
+  }));
+
+  const onePlusOneEur = onePlusOne.map((r) => ({
+    weekOfYear: r.weekOfYear,
+    periodText: r.periodText,
+    cashCents: toEurCentsFromGbp(r.pesinCents),
+    installment6Cents: toEurCentsFromGbp(r.taksit6Cents),
+    installment12Cents: toEurCentsFromGbp(r.taksit12Cents),
+  }));
+
+  const twoPlusOneEur = twoPlusOne.map((r) => ({
+    weekOfYear: r.weekOfYear,
+    periodText: r.periodText,
+    cashCents: toEurCentsFromGbp(r.pesinCents),
+    installment6Cents: toEurCentsFromGbp(r.taksit6Cents),
+    installment12Cents: toEurCentsFromGbp(r.taksit12Cents),
+  }));
+
+  for (const r of twoPlusOneEur) {
     await prisma.weekPrice.upsert({
       where: { unitType_weekOfYear: { unitType: "TWO_PLUS_ONE", weekOfYear: r.weekOfYear } },
       update: {
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
       create: {
         unitType: "TWO_PLUS_ONE",
         weekOfYear: r.weekOfYear,
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
     });
   }
 
-  console.log("✅ TWO_PLUS_ONE week prices upserted:", twoPlusOne.length);
+  console.log("✅ TWO_PLUS_ONE week prices upserted:", twoPlusOneEur.length);
 
-  for (const r of onePlusOne) {
+  for (const r of onePlusOneEur) {
     await prisma.weekPrice.upsert({
       where: { unitType_weekOfYear: { unitType: "ONE_PLUS_ONE", weekOfYear: r.weekOfYear } },
       update: {
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
       create: {
         unitType: "ONE_PLUS_ONE",
         weekOfYear: r.weekOfYear,
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
     });
   }
 
-  console.log("✅ ONE_PLUS_ONE week prices upserted:", onePlusOne.length);
+  console.log("✅ ONE_PLUS_ONE week prices upserted:", onePlusOneEur.length);
 
-  for (const r of studio) {
+  for (const r of studioEur) {
     await prisma.weekPrice.upsert({
       where: { unitType_weekOfYear: { unitType: "STUDIO", weekOfYear: r.weekOfYear } },
       update: {
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
       create: {
         unitType: "STUDIO",
         weekOfYear: r.weekOfYear,
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
     });
   }
 
-  console.log("✅ STUDIO week prices upserted:", studio.length);
+  console.log("✅ STUDIO week prices upserted:", studioEur.length);
 }
 
 main()

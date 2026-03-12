@@ -32,7 +32,7 @@ class CreateInstallmentDto {
 
   @IsInt()
   @Min(1)
-  amountCents!: number;
+  baseAmountCents!: number;
 
   @IsString()
   @IsOptional()
@@ -77,7 +77,7 @@ export class ContractsController {
       return { ok: false, message: "Sunum bulunamadı" };
     }
 
-    if (!pres.unitType || !pres.weekOfYear || !pres.paymentPlan || !pres.priceCents) {
+    if (!pres.unitType || !pres.weekOfYear || !pres.paymentPlan || !pres.basePriceCents) {
       return { ok: false, message: "Sunum tamamlanmamış (unit/hafta/plan/fiyat eksik)" };
     }
 
@@ -100,7 +100,7 @@ export class ContractsController {
           unitType: pres.unitType!,
           weekOfYear: pres.weekOfYear!,
           paymentPlan: pres.paymentPlan!,
-          priceCents: pres.priceCents!,
+          basePriceCents: pres.basePriceCents!,
         },
         select: { id: true },
       });
@@ -109,11 +109,11 @@ export class ContractsController {
         await tx.customPaymentPlan.create({
           data: {
             contractId: contract.id,
-            totalCents: pres.priceCents!,
+            baseTotalCents: pres.basePriceCents!,
             installments: {
               create: installments.map((inst) => ({
                 dueDate: new Date(inst.dueDate),
-                amountCents: inst.amountCents,
+                baseAmountCents: inst.baseAmountCents,
                 label: inst.label,
               })),
             },

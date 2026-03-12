@@ -61,12 +61,12 @@ class UpdatePresentationDto {
 
 // ✅ price column mapping
 function priceFromWeekPriceRow(
-  row: { pesinCents: number; taksit6Cents: number; taksit12Cents: number },
+  row: { cashCents: number; installment6Cents: number; installment12Cents: number },
   plan: "PESIN" | "ALTIN" | "TAKSIT_12"
 ) {
-  if (plan === "PESIN") return row.pesinCents;
-  if (plan === "ALTIN") return row.taksit6Cents; // UI: 6 Ay
-  return row.taksit12Cents; // TAKSIT_12
+  if (plan === "PESIN") return row.cashCents;
+  if (plan === "ALTIN") return row.installment6Cents; // UI: 6 Ay
+  return row.installment12Cents; // TAKSIT_12
 }
 
 @Controller("presentations")
@@ -222,7 +222,7 @@ export class PresentationsController {
     const targetCurrency: SupportedCurrency =
       SUPPORTED_CURRENCIES.includes(currencyParam as SupportedCurrency)
         ? (currencyParam as SupportedCurrency)
-        : "GBP";
+        : "EUR";
 
     let periodText: string | null = null;
     if (pres.unitType && pres.weekOfYear) {
@@ -234,8 +234,8 @@ export class PresentationsController {
     }
 
     const price =
-      pres.priceCents != null
-        ? await this.currency.convertFromGbpPence(pres.priceCents, targetCurrency)
+      pres.basePriceCents != null
+        ? await this.currency.convertFromBaseCents(pres.basePriceCents, targetCurrency)
         : null;
 
     return {
@@ -248,6 +248,7 @@ export class PresentationsController {
         unitType: pres.unitType,
         weekOfYear: pres.weekOfYear,
         paymentPlan: pres.paymentPlan,
+        basePriceCents: pres.basePriceCents,
         price,
         currency: targetCurrency,
         periodText,
@@ -289,23 +290,23 @@ export class PresentationsController {
     const targetCurrency: SupportedCurrency =
       SUPPORTED_CURRENCIES.includes(currencyParam as SupportedCurrency)
         ? (currencyParam as SupportedCurrency)
-        : "GBP";
+        : "EUR";
 
     // ✅ price + periodText from DB
-    let priceCents: number | null = null;
+    let basePriceCents: number | null = null;
     let periodText: string | null = null;
 
     if (merged.unitType && merged.weekOfYear && merged.paymentPlan) {
       const row = await this.prisma.weekPrice.findUnique({
         where: { unitType_weekOfYear: { unitType: merged.unitType, weekOfYear: merged.weekOfYear } },
-        select: { pesinCents: true, taksit6Cents: true, taksit12Cents: true, periodText: true },
+        select: { cashCents: true, installment6Cents: true, installment12Cents: true, periodText: true },
       });
 
       if (!row) {
         return { ok: false, message: "Fiyat tablosunda bu ünite/hafta bulunamadı" };
       }
 
-      priceCents = priceFromWeekPriceRow(row, merged.paymentPlan);
+      basePriceCents = priceFromWeekPriceRow(row, merged.paymentPlan);
       periodText = row.periodText;
     }
 
@@ -317,14 +318,14 @@ export class PresentationsController {
         unitType: body.unitType ?? undefined,
         weekOfYear: body.weekOfYear ?? undefined,
         paymentPlan: body.paymentPlan ?? undefined,
-        priceCents: priceCents ?? null,
+        basePriceCents: basePriceCents ?? null,
       },
       include: { customer: { select: { fullName: true, phoneE164: true } } },
     });
 
     const price =
-      updated.priceCents != null
-        ? await this.currency.convertFromGbpPence(updated.priceCents, targetCurrency)
+      updated.basePriceCents != null
+        ? await this.currency.convertFromBaseCents(updated.basePriceCents, targetCurrency)
         : null;
 
     return {
@@ -337,6 +338,7 @@ export class PresentationsController {
         unitType: updated.unitType,
         weekOfYear: updated.weekOfYear,
         paymentPlan: updated.paymentPlan,
+        basePriceCents: updated.basePriceCents,
         price,
         currency: targetCurrency,
         periodText,

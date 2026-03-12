@@ -3,9 +3,9 @@ import { PrismaService } from "../prisma/prisma.service";
 
 type UpdateWeekPriceData = {
   periodText?: string;
-  pesinCents?: number;
-  taksit6Cents?: number;
-  taksit12Cents?: number;
+  cashCents?: number;
+  installment6Cents?: number;
+  installment12Cents?: number;
 };
 
 type BulkUpdateItem = {

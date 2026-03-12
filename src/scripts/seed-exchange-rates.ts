@@ -1,8 +1,8 @@
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
-const BASE = "GBP";
-const CURRENCIES = ["GBP", "EUR", "USD", "TRY"];
+const BASE = "EUR";
+const CURRENCIES = ["EUR", "GBP", "USD", "TRY"];
 const API_URL = `https://open.er-api.com/v6/latest/${BASE}`;
 
 async function main() {
@@ -25,7 +25,7 @@ async function main() {
       create: { fromCurrency: BASE, toCurrency: currency, rate },
     });
 
-    console.log(`✅ GBP → ${currency}: ${rate}`);
+    console.log(`✅ EUR → ${currency}: ${rate}`);
   }
 }
 

@@ -4,12 +4,12 @@ import * as path from "path";
 
 const prisma = new PrismaClient();
 
-function formatRows(rows: { weekOfYear: number; periodText: string; taksit12Cents: number; taksit6Cents: number; pesinCents: number }[]) {
+function formatRows(rows: { weekOfYear: number; periodText: string; installment12Cents: number; installment6Cents: number; cashCents: number }[]) {
   return rows
     .sort((a, b) => a.weekOfYear - b.weekOfYear)
     .map((r) => {
       const pad = (n: number) => String(n).padStart(7, " ");
-      return `    { weekOfYear: ${String(r.weekOfYear).padEnd(2, " ")}, periodText: "${r.periodText}", taksit12Cents: ${pad(r.taksit12Cents)}, taksit6Cents: ${pad(r.taksit6Cents)}, pesinCents: ${pad(r.pesinCents)} },`;
+      return `    { weekOfYear: ${String(r.weekOfYear).padEnd(2, " ")}, periodText: "${r.periodText}", installment12Cents: ${pad(r.installment12Cents)}, installment6Cents: ${pad(r.installment6Cents)}, cashCents: ${pad(r.cashCents)} },`;
     })
     .join("\n");
 }
@@ -36,13 +36,13 @@ async function main() {
 ${formatRows(studio)}
   ];
 
-    // ONE_PLUS_ONE prices (GBP pence) + periodText
+    // ONE_PLUS_ONE prices (EUR cents) + periodText
   const onePlusOne = [
 ${formatRows(onePlusOne)}
   ];
 
 
-    // TWO_PLUS_ONE prices (GBP pence) + periodText
+    // TWO_PLUS_ONE prices (EUR cents) + periodText
   const twoPlusOne = [
 ${formatRows(twoPlusOne)}
   ];
@@ -52,17 +52,17 @@ ${formatRows(twoPlusOne)}
       where: { unitType_weekOfYear: { unitType: "TWO_PLUS_ONE", weekOfYear: r.weekOfYear } },
       update: {
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
       create: {
         unitType: "TWO_PLUS_ONE",
         weekOfYear: r.weekOfYear,
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
     });
   }
@@ -74,17 +74,17 @@ ${formatRows(twoPlusOne)}
       where: { unitType_weekOfYear: { unitType: "ONE_PLUS_ONE", weekOfYear: r.weekOfYear } },
       update: {
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
       create: {
         unitType: "ONE_PLUS_ONE",
         weekOfYear: r.weekOfYear,
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
     });
   }
@@ -96,17 +96,17 @@ ${formatRows(twoPlusOne)}
       where: { unitType_weekOfYear: { unitType: "STUDIO", weekOfYear: r.weekOfYear } },
       update: {
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
       create: {
         unitType: "STUDIO",
         weekOfYear: r.weekOfYear,
         periodText: r.periodText,
-        pesinCents: r.pesinCents,
-        taksit6Cents: r.taksit6Cents,
-        taksit12Cents: r.taksit12Cents,
+        cashCents: r.cashCents,
+        installment6Cents: r.installment6Cents,
+        installment12Cents: r.installment12Cents,
       },
     });
   }

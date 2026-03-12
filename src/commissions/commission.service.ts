@@ -33,13 +33,13 @@ export class CommissionService {
 
     const contract = await this.prisma.contract.findUnique({
       where: { id: contractId },
-      select: { id: true, status: true, priceCents: true, salespersonId: true },
+      select: { id: true, status: true, basePriceCents: true, salespersonId: true },
     });
 
     if (!contract) return { ok: false, message: "Contract not found" };
     if (contract.status !== "APPROVED") return { ok: false, message: "Contract not APPROVED" };
 
-    const priceCents = contract.priceCents;
+    const basePriceCents = contract.basePriceCents;
 
     let currentUserId: string | null = contract.salespersonId;
     let lastPaidAbsoluteRate = 0;
@@ -83,7 +83,7 @@ export class CommissionService {
       const deltaRate = absoluteRate - lastPaidAbsoluteRate;
 
       if (deltaRate > 0) {
-        const amountCents = Math.round(priceCents * deltaRate);
+        const baseAmountCents = Math.round(basePriceCents * deltaRate);
 
         await this.prisma.commission.create({
           data: {
@@ -91,7 +91,7 @@ export class CommissionService {
             userId: u.id,
             level: effectiveLevel,
             rate: deltaRate,
-            amountCents,
+            baseAmountCents,
             status: "PENDING",
           },
         });
