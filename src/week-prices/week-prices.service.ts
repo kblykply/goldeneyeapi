@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 import { PrismaService } from "../prisma/prisma.service";
 
 type UpdateWeekPriceData = {
@@ -24,13 +25,12 @@ export class WeekPricesService {
   }
 
   async updateOne(id: string, data: UpdateWeekPriceData) {
-    const existing = await this.prisma.weekPrice.findUnique({ where: { id } });
-    if (!existing) return null;
-
-    return this.prisma.weekPrice.update({
-      where: { id },
-      data,
-    });
+    try {
+      return await this.prisma.weekPrice.update({ where: { id }, data });
+    } catch (e) {
+      if (e instanceof PrismaClientKnownRequestError && e.code === "P2025") return null;
+      throw e;
+    }
   }
 
   async bulkUpdate(items: BulkUpdateItem[]) {

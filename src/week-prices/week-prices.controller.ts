@@ -49,7 +49,6 @@ export class WeekPricesController {
   constructor(private readonly weekPricesService: WeekPricesService) {}
 
   @Get()
-  @Roles("ADMIN", "REGIONAL_MANAGER", "AUTHORITY", "USER")
   async list() {
     const prices = await this.weekPricesService.list();
     return { ok: true, prices };
