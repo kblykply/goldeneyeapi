@@ -45,23 +45,25 @@ class BulkUpdateDto {
 
 @Controller("week-prices")
 @UseGuards(AuthGuard, RolesGuard)
-@Roles("ADMIN")
 export class WeekPricesController {
   constructor(private readonly weekPricesService: WeekPricesService) {}
 
   @Get()
+  @Roles("ADMIN", "REGIONAL_MANAGER", "AUTHORITY", "USER")
   async list() {
     const prices = await this.weekPricesService.list();
     return { ok: true, prices };
   }
 
   @Patch("bulk")
+  @Roles("ADMIN")
   async bulkUpdate(@Body() body: BulkUpdateDto) {
     const result = await this.weekPricesService.bulkUpdate(body.items);
     return { ok: true, ...result };
   }
 
   @Patch(":id")
+  @Roles("ADMIN")
   async updateOne(@Param("id") id: string, @Body() body: UpdateWeekPriceDto) {
     const updated = await this.weekPricesService.updateOne(id, body);
     if (!updated) return { ok: false, message: "Fiyat kaydı bulunamadı" };
