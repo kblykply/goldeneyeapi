@@ -117,10 +117,10 @@ export class ContractsController {
           weekOfYear: pres.weekOfYear!,
           paymentPlan: pres.paymentPlan!,
           basePriceCents: pres.basePriceCents!,
-          nationality: body.nationality,
-          passportNumber: body.passportNumber,
-          email: body.email,
-          address: body.address,
+          nationality: body.nationality ?? null,
+          passportNumber: body.passportNumber ?? null,
+          email: body.email ?? null,
+          address: body.address ?? null,
         },
         select: { id: true },
       });
@@ -335,4 +335,59 @@ export class ContractsController {
 
     return { ok: false, message: "Yetkisiz" };
   }
+
+  /**
+   * 8) Belge oluşturma için meta veri
+   * GET /contracts/:id/doc-meta
+   */
+  @Get(":id/doc-meta")
+  async getDocMeta(@Param("id") id: string, @Req() req: Request & { user: AuthedUser }) {
+    const me = req.user;
+
+    const c = await this.prisma.contract.findUnique({
+      where: { id },
+      include: {
+        salesperson: { select: { id: true, fullName: true, leaderId: true } },
+      },
+    });
+
+    if (!c) return { ok: false, message: "Sözleşme bulunamadı" };
+
+    const canAccess =
+      c.salespersonId === me.id ||
+      me.role === "ADMIN" ||
+      me.role === "AUTHORITY" ||
+      (me.role === "REGIONAL_MANAGER" && (await this.team.getSubtreeIds(me.id)).has(c.salespersonId));
+
+    if (!canAccess) return { ok: false, message: "Yetkisiz" };
+
+    // WeekPrice'tan periodText al
+    const weekPrice = await this.prisma.weekPrice.findUnique({
+      where: { unitType_weekOfYear: { unitType: c.unitType, weekOfYear: c.weekOfYear } },
+      select: { periodText: true },
+    });
+
+    // Hiyerarşide REGIONAL_MANAGER'ı bul
+    let regionalManager: { fullName: string; phoneE164: string } | null = null;
+    let currentLeaderId = c.salesperson.leaderId;
+    while (currentLeaderId) {
+      const leader = await this.prisma.user.findUnique({
+        where: { id: currentLeaderId },
+        select: { id: true, fullName: true, phoneE164: true, role: true, leaderId: true },
+      });
+      if (!leader) break;
+      if (leader.role === "REGIONAL_MANAGER") {
+        regionalManager = { fullName: leader.fullName, phoneE164: leader.phoneE164 };
+        break;
+      }
+      currentLeaderId = leader.leaderId;
+    }
+
+    return {
+      ok: true,
+      periodText: weekPrice?.periodText ?? `${c.weekOfYear}. Hafta`,
+      regionalManager,
+    };
+  }
+
 }

@@ -347,6 +347,54 @@ export class PresentationsController {
     };
   }
 
+  /**
+   * GET /presentations/:id/doc-meta
+   * Docx oluşturmak için gereken ek meta verileri döner (periodText + regionalManager)
+   */
+  @Get(":id/doc-meta")
+  async getDocMeta(@Param("id") id: string, @Req() req: Request & { user: AuthedUser }) {
+    const me = req.user;
+
+    const pres = await this.prisma.presentation.findUnique({
+      where: { id },
+      include: { salesperson: { select: { id: true, leaderId: true } } },
+    });
+
+    if (!pres || pres.salespersonId !== me.id) {
+      return { ok: false, message: "Sunum bulunamadı" };
+    }
+
+    if (!pres.unitType || !pres.weekOfYear) {
+      return { ok: false, message: "Sunum tamamlanmamış" };
+    }
+
+    const weekPrice = await this.prisma.weekPrice.findUnique({
+      where: { unitType_weekOfYear: { unitType: pres.unitType, weekOfYear: pres.weekOfYear } },
+      select: { periodText: true },
+    });
+
+    let regionalManager: { fullName: string; phoneE164: string } | null = null;
+    let currentLeaderId = pres.salesperson.leaderId;
+    while (currentLeaderId) {
+      const leader = await this.prisma.user.findUnique({
+        where: { id: currentLeaderId },
+        select: { id: true, fullName: true, phoneE164: true, role: true, leaderId: true },
+      });
+      if (!leader) break;
+      if (leader.role === "REGIONAL_MANAGER") {
+        regionalManager = { fullName: leader.fullName, phoneE164: leader.phoneE164 };
+        break;
+      }
+      currentLeaderId = leader.leaderId;
+    }
+
+    return {
+      ok: true,
+      periodText: weekPrice?.periodText ?? `${pres.weekOfYear}. Hafta`,
+      regionalManager,
+    };
+  }
+
   @Post("end")
   async end(
     @Body() body: EndPresentationDto,
