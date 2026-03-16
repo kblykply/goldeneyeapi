@@ -3,9 +3,10 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { ContractsController } from "./contracts.controller";
 import { CommissionsModule } from "../commissions/commissions.module";
 import { TeamModule } from "../team/team.module";
+import { SmsModule } from "../sms/sms.module";
 
 @Module({
-  imports: [PrismaModule, CommissionsModule, TeamModule],
+  imports: [PrismaModule, CommissionsModule, TeamModule, SmsModule],
   controllers: [ContractsController],
 })
 export class ContractsModule {}

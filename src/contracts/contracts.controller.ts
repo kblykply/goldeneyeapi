@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Req, UseGuards, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
@@ -8,6 +9,15 @@ import { Type } from "class-transformer";
 import * as crypto from "crypto";
 import { CommissionService } from "../commissions/commission.service";
 import { TeamService } from "../team/team.service";
+import { SmsService } from "../sms/sms.service";
+import { ConfigService } from "@nestjs/config";
+import { createClient } from "@supabase/supabase-js";
+
+const PLAN_LABELS: Record<string, string> = {
+  PESIN: "Peşin",
+  ALTIN: "Altın (6 Ay)",
+  TAKSIT_12: "12 Taksit",
+};
 
 function hashOtp(otp: string) {
   return crypto.createHash("sha256").update(otp).digest("hex");
@@ -66,11 +76,20 @@ class CreateContractFromPresentationDto {
 @Controller("contracts")
 @UseGuards(AuthGuard)
 export class ContractsController {
+  private supabase: ReturnType<typeof createClient>;
+
   constructor(
     private prisma: PrismaService,
     private commissions: CommissionService,
-    private team: TeamService
-  ) {}
+    private team: TeamService,
+    private sms: SmsService,
+    private config: ConfigService,
+  ) {
+    this.supabase = createClient(
+      this.config.get<string>("SUPABASE_URL") ?? "",
+      this.config.get<string>("SUPABASE_SERVICE_KEY") ?? "",
+    );
+  }
 
   /**
    * 1) Presentation'dan Contract oluştur (DRAFT)
@@ -397,6 +416,102 @@ export class ContractsController {
       periodText: weekPrice?.periodText ?? `${c.weekOfYear}. Hafta`,
       regionalManager,
     };
+  }
+
+  /**
+   * 9) DOCX'i Supabase Storage'a yükle ve müşteriye WhatsApp ile gönder
+   * POST /contracts/:id/send-doc-whatsapp
+   */
+  @Post(":id/send-doc-whatsapp")
+  @UseInterceptors(FileInterceptor("file"))
+  async sendDocWhatsApp(
+    @Param("id") id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: Request & { user: AuthedUser }
+  ) {
+    const me = req.user;
+
+    if (!file) return { ok: false, message: "Dosya bulunamadı" };
+
+    const c = await this.prisma.contract.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        salespersonId: true,
+        basePriceCents: true,
+        paymentPlan: true,
+        unitType: true,
+        weekOfYear: true,
+        customer: { select: { phoneE164: true, fullName: true } },
+        customPaymentPlan: {
+          select: {
+            installments: {
+              select: { dueDate: true, baseAmountCents: true, label: true },
+              orderBy: { dueDate: "asc" },
+            },
+          },
+        },
+      },
+    });
+
+    if (!c || c.salespersonId !== me.id) {
+      return { ok: false, message: "Sözleşme bulunamadı" };
+    }
+
+    const weekPrice = c.unitType && c.weekOfYear
+      ? await this.prisma.weekPrice.findUnique({
+          where: { unitType_weekOfYear: { unitType: c.unitType, weekOfYear: c.weekOfYear } },
+          select: { periodText: true },
+        })
+      : null;
+
+    const supabaseUrl = this.config.get<string>("SUPABASE_URL") ?? "";
+
+    const safeName = c.customer.fullName.replace(/[^a-zA-Z0-9ğüşıöçĞÜŞİÖÇ]/g, "_");
+    const filePath = `${id}/rezervasyon_${safeName}.docx`;
+    const { error: uploadError } = await this.supabase.storage
+      .from("contracts")
+      .upload(filePath, file.buffer, {
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      return { ok: false, message: `Dosya yüklenemedi: ${uploadError.message}` };
+    }
+
+    const publicUrl = `${supabaseUrl}/storage/v1/object/public/contracts/${filePath}`;
+
+    const periodText = weekPrice?.periodText ?? (c.weekOfYear ? `${c.weekOfYear}. Hafta` : "-");
+    const totalEur = c.basePriceCents ? (c.basePriceCents / 100).toLocaleString("tr-TR", { minimumFractionDigits: 0 }) : "-";
+    const planLabel = (c.paymentPlan && PLAN_LABELS[c.paymentPlan]) ?? "-";
+
+    const installmentLines = c.customPaymentPlan?.installments.map((inst) => {
+      const date = new Date(inst.dueDate).toLocaleDateString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric" });
+      const amount = (inst.baseAmountCents / 100).toLocaleString("tr-TR", { minimumFractionDigits: 0 });
+      const label = inst.label ? `${inst.label} - ` : "";
+      return `  • ${label}${date}: €${amount}`;
+    }) ?? [];
+
+    const message = [
+      `Merhaba ${c.customer.fullName}, rezervasyon belgeniz hazır. Lütfen inceleyiniz.`,
+      ``,
+      `📋 *Rezervasyon Detayları*`,
+      `• Dönem: ${periodText}`,
+      `• Ödeme Planı: ${planLabel}`,
+      `• Toplam Tutar: €${totalEur}`,
+      ...(installmentLines.length > 0 ? [``, `💳 *Ödeme Takvimi*`, ...installmentLines] : []),
+      ``,
+      `🏦 *Banka Hesap Bilgileri*`,
+      `Hesap Adı: CY-DND MAINTENANCE & SERVICE'S LTD.`,
+      `SWIFT/BIC: TCZBTR2AXXX`,
+      `TL Hesabı (IBAN): TR63 0001 0008 6198 3192 0850 01`,
+      `EUR Hesabı (IBAN): TR09 0001 0008 6198 3192 0850 03`,
+    ].join("\n");
+
+    await this.sms.sendWhatsApp(c.customer.phoneE164, message, publicUrl);
+
+    return { ok: true, docUrl: publicUrl, fileName: `rezervasyon_${safeName}.docx` };
   }
 
 }
