@@ -12,16 +12,6 @@ import { TeamService } from "../team/team.service";
 import { SmsService } from "../sms/sms.service";
 import { ConfigService } from "@nestjs/config";
 import { createClient } from "@supabase/supabase-js";
-import * as libre from "libreoffice-convert";
-
-function libreConvert(buf: Buffer, ext: string, filter: undefined): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    libre.convert(buf, ext, filter, (err: Error | null, result: Buffer) => {
-      if (err) reject(err);
-      else resolve(result);
-    });
-  });
-}
 
 const PLAN_LABELS: Record<string, string> = {
   PESIN: "Peşin",
@@ -478,23 +468,14 @@ export class ContractsController {
     const supabaseUrl = this.config.get<string>("SUPABASE_URL") ?? "";
 
     const safeName = c.customer.fullName.replace(/[^a-zA-Z0-9ğüşıöçĞÜŞİÖÇ]/g, "_");
-
-    let uploadBuffer: Buffer;
-    let filePath: string;
-    let contentType: string;
-    try {
-      uploadBuffer = await libreConvert(file.buffer, ".pdf", undefined) as Buffer;
-      filePath = `${id}/rezervasyon_${safeName}.pdf`;
-      contentType = "application/pdf";
-    } catch {
-      uploadBuffer = file.buffer;
-      filePath = `${id}/rezervasyon_${safeName}.docx`;
-      contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    }
+    const filePath = `${id}/rezervasyon_${safeName}.docx`;
 
     const { error: uploadError } = await this.supabase.storage
       .from("contracts")
-      .upload(filePath, uploadBuffer, { contentType, upsert: true });
+      .upload(filePath, file.buffer, {
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        upsert: true,
+      });
 
     if (uploadError) {
       return { ok: false, message: `Dosya yüklenemedi: ${uploadError.message}` };
