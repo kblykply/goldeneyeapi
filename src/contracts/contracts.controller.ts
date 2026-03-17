@@ -12,6 +12,16 @@ import { TeamService } from "../team/team.service";
 import { SmsService } from "../sms/sms.service";
 import { ConfigService } from "@nestjs/config";
 import { createClient } from "@supabase/supabase-js";
+import * as libre from "libreoffice-convert";
+
+function libreConvert(buf: Buffer, ext: string, filter: undefined): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    libre.convert(buf, ext, filter, (err: Error | null, result: Buffer) => {
+      if (err) reject(err);
+      else resolve(result);
+    });
+  });
+}
 
 const PLAN_LABELS: Record<string, string> = {
   PESIN: "Peşin",
@@ -468,13 +478,23 @@ export class ContractsController {
     const supabaseUrl = this.config.get<string>("SUPABASE_URL") ?? "";
 
     const safeName = c.customer.fullName.replace(/[^a-zA-Z0-9ğüşıöçĞÜŞİÖÇ]/g, "_");
-    const filePath = `${id}/rezervasyon_${safeName}.docx`;
+
+    let uploadBuffer: Buffer;
+    let filePath: string;
+    let contentType: string;
+    try {
+      uploadBuffer = await libreConvert(file.buffer, ".pdf", undefined) as Buffer;
+      filePath = `${id}/rezervasyon_${safeName}.pdf`;
+      contentType = "application/pdf";
+    } catch {
+      uploadBuffer = file.buffer;
+      filePath = `${id}/rezervasyon_${safeName}.docx`;
+      contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    }
+
     const { error: uploadError } = await this.supabase.storage
       .from("contracts")
-      .upload(filePath, file.buffer, {
-        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        upsert: true,
-      });
+      .upload(filePath, uploadBuffer, { contentType, upsert: true });
 
     if (uploadError) {
       return { ok: false, message: `Dosya yüklenemedi: ${uploadError.message}` };
@@ -486,32 +506,15 @@ export class ContractsController {
     const totalEur = c.basePriceCents ? (c.basePriceCents / 100).toLocaleString("tr-TR", { minimumFractionDigits: 0 }) : "-";
     const planLabel = (c.paymentPlan && PLAN_LABELS[c.paymentPlan]) ?? "-";
 
-    const installmentLines = c.customPaymentPlan?.installments.map((inst) => {
-      const date = new Date(inst.dueDate).toLocaleDateString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric" });
-      const amount = (inst.baseAmountCents / 100).toLocaleString("tr-TR", { minimumFractionDigits: 0 });
-      const label = inst.label ? `${inst.label} - ` : "";
-      return `  • ${label}${date}: €${amount}`;
-    }) ?? [];
+    await this.sms.sendWhatsApp(c.customer.phoneE164, {
+      "1": c.customer.fullName,
+      "2": periodText,
+      "3": planLabel,
+      "4": totalEur,
+      "5": publicUrl,
+    });
 
-    const message = [
-      `Merhaba ${c.customer.fullName}, rezervasyon belgeniz hazır. Lütfen inceleyiniz.`,
-      ``,
-      `📋 *Rezervasyon Detayları*`,
-      `• Dönem: ${periodText}`,
-      `• Ödeme Planı: ${planLabel}`,
-      `• Toplam Tutar: €${totalEur}`,
-      ...(installmentLines.length > 0 ? [``, `💳 *Ödeme Takvimi*`, ...installmentLines] : []),
-      ``,
-      `🏦 *Banka Hesap Bilgileri*`,
-      `Hesap Adı: CY-DND MAINTENANCE & SERVICE'S LTD.`,
-      `SWIFT/BIC: TCZBTR2AXXX`,
-      `TL Hesabı (IBAN): TR63 0001 0008 6198 3192 0850 01`,
-      `EUR Hesabı (IBAN): TR09 0001 0008 6198 3192 0850 03`,
-    ].join("\n");
-
-    await this.sms.sendWhatsApp(c.customer.phoneE164, message, publicUrl);
-
-    return { ok: true, docUrl: publicUrl, fileName: `rezervasyon_${safeName}.docx` };
+    return { ok: true, docUrl: publicUrl, fileName: filePath.split("/").pop() };
   }
 
 }

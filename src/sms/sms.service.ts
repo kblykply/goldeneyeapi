@@ -7,12 +7,14 @@ export class SmsService {
   private client: Twilio.Twilio;
   private verifySid: string;
   private whatsappFrom: string;
+  private contentSid: string;
 
   constructor(private config: ConfigService) {
     const sid = this.config.get<string>("TWILIO_ACCOUNT_SID") ?? "";
     const token = this.config.get<string>("TWILIO_AUTH_TOKEN") ?? "";
     this.verifySid = this.config.get<string>("TWILIO_VERIFY_SID") ?? "";
-    this.whatsappFrom = this.config.get<string>("TWILIO_WHATSAPP_FROM") ?? "whatsapp:+14155238886";
+    this.whatsappFrom = this.config.get<string>("TWILIO_WHATSAPP_FROM") ?? "";
+    this.contentSid = this.config.get<string>("TWILIO_CONTENT_SID") ?? "";
 
     this.client = Twilio(sid || "", token || "");
   }
@@ -31,12 +33,12 @@ export class SmsService {
     return { valid: check.status === "approved" };
   }
 
-  async sendWhatsApp(toE164: string, body: string, mediaUrl?: string) {
+  async sendWhatsApp(toE164: string, variables: Record<string, string>) {
     const msg = await this.client.messages.create({
       from: this.whatsappFrom,
       to: `whatsapp:${toE164}`,
-      body,
-      ...(mediaUrl ? { mediaUrl: [mediaUrl] } : {}),
+      contentSid: this.contentSid,
+      contentVariables: JSON.stringify(variables),
     });
     return { sid: msg.sid, status: msg.status };
   }
