@@ -2,7 +2,6 @@ import { Body, Controller, Get, Param, Patch, UseGuards } from "@nestjs/common";
 import { IsArray, IsInt, IsOptional, IsString, Min, ValidateNested } from "class-validator";
 import { Type } from "class-transformer";
 import { WeekPricesService } from "./week-prices.service";
-import { AuthGuard } from "../auth/auth.guard";
 import { RolesGuard } from "../auth/roles.guard";
 import { Roles } from "../auth/roles.decorator";
 
@@ -44,7 +43,7 @@ class BulkUpdateDto {
 }
 
 @Controller("week-prices")
-@UseGuards(AuthGuard, RolesGuard)
+@UseGuards(RolesGuard)
 export class WeekPricesController {
   constructor(private readonly weekPricesService: WeekPricesService) {}
 

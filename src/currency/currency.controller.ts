@@ -1,9 +1,7 @@
-import { Controller, Get, Post, UseGuards } from "@nestjs/common";
+import { Controller, Get, Post } from "@nestjs/common";
 import { CurrencyService } from "./currency.service";
-import { AuthGuard } from "../auth/auth.guard";
 
 @Controller("currency")
-@UseGuards(AuthGuard)
 export class CurrencyController {
   constructor(private readonly currencyService: CurrencyService) {}
 

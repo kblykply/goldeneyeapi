@@ -1,6 +1,5 @@
-import { Controller, Get, Param, Query, Req, UseGuards } from "@nestjs/common";
+import { Controller, Get, Param, Query, Req } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import { TeamService } from "./team.service";
@@ -39,7 +38,6 @@ function daysAgo(n: number) {
 }
 
 @Controller("team")
-@UseGuards(AuthGuard)
 export class TeamController {
   constructor(private prisma: PrismaService, private team: TeamService) {}
 

@@ -1,8 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { OtpService } from "../otp/otp.service";
 import { CurrencyService } from "../currency/currency.service";
-import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
@@ -70,7 +69,6 @@ function priceFromWeekPriceRow(
 }
 
 @Controller("presentations")
-@UseGuards(AuthGuard)
 export class PresentationsController {
   constructor(
     private prisma: PrismaService,

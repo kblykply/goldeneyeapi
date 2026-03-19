@@ -3,7 +3,6 @@ import {
   Controller,
   Post,
   Req,
-  UseGuards,
   UseInterceptors,
   UploadedFile,
 } from "@nestjs/common";
@@ -11,7 +10,6 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 import { extname } from "path";
 import { PrismaService } from "../prisma/prisma.service";
-import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import * as fs from "fs";
@@ -27,7 +25,6 @@ export class UsersController {
   constructor(private prisma: PrismaService) {}
 
   @Post("me/avatar")
-  @UseGuards(AuthGuard)
   @UseInterceptors(
     FileInterceptor("file", {
       storage: diskStorage({

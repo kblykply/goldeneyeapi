@@ -1,11 +1,9 @@
-import { Controller, Post, Req, UseGuards } from "@nestjs/common";
+import { Controller, Post, Req } from "@nestjs/common";
 import { Request } from "express";
 import { PrismaService } from "../prisma/prisma.service";
-import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
 
 @Controller("presence")
-@UseGuards(AuthGuard)
 export class PresenceController {
   constructor(private prisma: PrismaService) {}
 

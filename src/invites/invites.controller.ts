@@ -1,6 +1,5 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Post, Req } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import * as crypto from "crypto";
@@ -36,7 +35,6 @@ class CreateInviteDto {
 }
 
 @Controller("invites")
-@UseGuards(AuthGuard)
 export class InvitesController {
   constructor(private prisma: PrismaService) {}
 

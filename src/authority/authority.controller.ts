@@ -1,6 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { AuthGuard } from "../auth/auth.guard";
 import { Roles } from "../auth/roles.decorator";
 import { RolesGuard } from "../auth/roles.guard";
 import { Request } from "express";
@@ -12,7 +11,7 @@ class RejectDto {
 }
 
 @Controller("authority")
-@UseGuards(AuthGuard, RolesGuard)
+@UseGuards(RolesGuard)
 @Roles("AUTHORITY", "ADMIN")
 export class AuthorityController {
   constructor(private prisma: PrismaService, private commissions: CommissionService) {}

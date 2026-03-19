@@ -1,7 +1,6 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Req, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { PrismaService } from "../prisma/prisma.service";
-import { AuthGuard } from "../auth/auth.guard";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import { IsString, IsArray, IsOptional, IsDateString, IsInt, Min, ValidateNested, IsEmail } from "class-validator";
@@ -74,7 +73,6 @@ class CreateContractFromPresentationDto {
 }
 
 @Controller("contracts")
-@UseGuards(AuthGuard)
 export class ContractsController {
   private supabase: ReturnType<typeof createClient>;
 

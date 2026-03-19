@@ -1,6 +1,5 @@
-import { Controller, Get, Query, Req, UseGuards } from "@nestjs/common";
+import { Controller, Get, Query, Req } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { AuthGuard } from "../auth/auth.guard";
 import { Request } from "express";
 import { AuthedUser } from "../auth/auth.types";
 
@@ -11,7 +10,6 @@ function startOfToday() {
 }
 
 @Controller("me")
-@UseGuards(AuthGuard)
 export class MeController {
   constructor(private prisma: PrismaService) {}
 

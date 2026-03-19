@@ -76,8 +76,9 @@ model User {
   // audit actor
   auditLogs AuditLog[] @relation("AuditActor")
 
-  commissions  Commission[]
-  inviteTokens InviteToken[] @relation("InviterToInvites")
+  commissions   Commission[]
+  inviteTokens  InviteToken[]  @relation("InviterToInvites")
+  refreshTokens RefreshToken[]
 }
 
 model Customer {
@@ -303,6 +304,20 @@ model OtpCode {
   meta Json?
 
   @@index([phoneE164, purpose])
+  @@index([expiresAt])
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  revokedAt DateTime?
+
+  @@index([userId])
   @@index([expiresAt])
 }
 
