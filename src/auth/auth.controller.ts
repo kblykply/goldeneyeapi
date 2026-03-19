@@ -8,11 +8,10 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
-import { IsString, Matches, MinLength } from 'class-validator';
+import { IsString, MinLength } from 'class-validator';
 import * as bcrypt from 'bcrypt';
 import { AuthedUser } from './auth.types';
 import { SkipAuth } from './skip-auth.decorator';
-import { Role } from '@prisma/client';
 
 class LoginDto {
   @IsString()
@@ -26,22 +25,6 @@ class LoginDto {
 class RefreshDto {
   @IsString()
   refreshToken!: string;
-}
-
-class JoinDto {
-  @IsString()
-  token!: string;
-
-  @IsString()
-  fullName!: string;
-
-  @IsString()
-  @Matches(/^\+\d{10,15}$/)
-  phoneE164!: string;
-
-  @IsString()
-  @MinLength(4)
-  password!: string;
 }
 
 @Controller('auth')
@@ -177,95 +160,4 @@ export class AuthController {
     return { ok: true };
   }
 
-  @SkipAuth()
-  @Post('join')
-  async join(@Body() body: JoinDto) {
-    const now = new Date();
-
-    const inv = await this.prisma.inviteToken.findUnique({
-      where: { token: body.token },
-      include: { inviter: { select: { id: true, role: true, level: true } } },
-    });
-
-    if (!inv) return { ok: false, message: 'Davet linki geçersiz' };
-    if (inv.revokedAt) return { ok: false, message: 'Davet iptal edilmiş' };
-    if (inv.expiresAt <= now)
-      return { ok: false, message: 'Davet süresi dolmuş' };
-    if (inv.usedCount >= inv.maxUses)
-      return { ok: false, message: 'Davet hakkı dolmuş' };
-
-    const inviter = inv.inviter;
-
-    if (inv.targetRole) {
-      if (inviter.role !== 'ADMIN') {
-        return {
-          ok: false,
-          message: 'Bu davet kural dışı (sadece admin RM daveti oluşturabilir)',
-        };
-      }
-    } else {
-      const allowedTarget =
-        inviter.role === 'ADMIN'
-          ? 3
-          : inviter.role === 'REGIONAL_MANAGER'
-            ? 3
-            : inviter.level === 3
-              ? 2
-              : inviter.level === 2
-                ? 1
-                : 0;
-
-      if (inv.targetLevel !== allowedTarget) {
-        return {
-          ok: false,
-          message: 'Bu davet kural dışı (hedef seviye uyuşmuyor)',
-        };
-      }
-    }
-
-    if (inviter.role !== 'ADMIN' && inviter.role !== 'REGIONAL_MANAGER') {
-      const direct = await this.prisma.user.count({
-        where: { leaderId: inviter.id },
-      });
-      if (direct >= 3)
-        return { ok: false, message: 'Bu liderin ekibi dolu (3 kişi)' };
-    }
-
-    const exists = await this.prisma.user.findUnique({
-      where: { phoneE164: body.phoneE164 },
-    });
-    if (exists) return { ok: false, message: 'Bu telefon zaten kayıtlı' };
-
-    const user = await this.prisma.$transaction(async (tx) => {
-      const u = await tx.user.create({
-        data: {
-          fullName: body.fullName,
-          phoneE164: body.phoneE164,
-          password: await bcrypt.hash(body.password, 10),
-          role: inv.targetRole ?? Role.USER,
-          level: inv.targetRole ? 0 : (inv.targetLevel ?? 1),
-          leaderId: inviter.id,
-          isActive: true,
-        },
-        select: {
-          id: true,
-          fullName: true,
-          phoneE164: true,
-          role: true,
-          level: true,
-          leaderId: true,
-          avatarUrl: true,
-        },
-      });
-
-      await tx.inviteToken.update({
-        where: { token: inv.token },
-        data: { usedCount: { increment: 1 } },
-      });
-
-      return u;
-    });
-
-    return { ok: true, user };
-  }
 }

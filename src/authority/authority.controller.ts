@@ -12,7 +12,7 @@ class RejectDto {
 
 @Controller("authority")
 @UseGuards(RolesGuard)
-@Roles("AUTHORITY", "ADMIN")
+@Roles("ADMIN")
 export class AuthorityController {
   constructor(private prisma: PrismaService, private commissions: CommissionService) {}
 

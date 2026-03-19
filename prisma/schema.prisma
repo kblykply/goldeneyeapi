@@ -77,7 +77,6 @@ model User {
   auditLogs AuditLog[] @relation("AuditActor")
 
   commissions   Commission[]
-  inviteTokens  InviteToken[]  @relation("InviterToInvites")
   refreshTokens RefreshToken[]
 }
 
@@ -321,24 +320,3 @@ model RefreshToken {
   @@index([expiresAt])
 }
 
-model InviteToken {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  expiresAt DateTime
-
-  token String @unique
-
-  inviterId String
-  inviter   User   @relation("InviterToInvites", fields: [inviterId], references: [id])
-
-  targetLevel Int?
-  targetRole  Role?
-  maxUses     Int       @default(3)
-  usedCount   Int       @default(0)
-  revokedAt   DateTime?
-
-  note String?
-
-  @@index([inviterId])
-  @@index([expiresAt])
-}

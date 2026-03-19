@@ -17,7 +17,6 @@ import { ContractsModule } from "./contracts/contracts.module";
 import { CommissionsModule } from "./commissions/commissions.module";
 import { SmsModule } from "./sms/sms.module";
 
-import { InvitesModule } from "./invites/invites.module";
 import { CurrencyModule } from "./currency/currency.module";
 import { WeekPricesModule } from "./week-prices/week-prices.module";
 
@@ -35,7 +34,6 @@ import { WeekPricesModule } from "./week-prices/week-prices.module";
     ContractsModule,
     CommissionsModule,
         SmsModule,
-        InvitesModule,
     CurrencyModule,
     WeekPricesModule,
   ],
