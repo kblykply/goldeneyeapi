@@ -171,10 +171,12 @@ export class UsersController {
           };
         }
 
-        // Lider creator'ın subtree'sinde mi?
-        const subtree = await this.teamService.getSubtreeIds(creator.id);
-        if (!subtree.has(body.leaderId)) {
-          return { ok: false, message: "Seçilen lider sizin ekibinizde değil" };
+        // RM için lider kendi subtree'sinde olmalı (ADMIN tüm sistemi yönetir)
+        if (creator.role !== "ADMIN") {
+          const subtree = await this.teamService.getSubtreeIds(creator.id);
+          if (!subtree.has(body.leaderId)) {
+            return { ok: false, message: "Seçilen lider sizin ekibinizde değil" };
+          }
         }
 
         // 3 kişi sınırı kontrolü
@@ -234,16 +236,23 @@ export class UsersController {
     // level=1 → lider level=2 USER
     let potentialLeaders: { id: string; fullName: string; level: number }[];
 
-    if (level === 3) {
-      // ADMIN tüm RM'leri görebilir (eski kullanıcıların leaderId'si null olabilir)
+    if (req.user.role === "ADMIN") {
+      // ADMIN tüm sistemi yönetir — subtree filtresi uygulanmaz
+      // (eski kullanıcılarda leaderId null olabileceğinden subtree traversal çalışmaz)
+      const leaderFilter =
+        level === 3
+          ? { role: "REGIONAL_MANAGER" as const }
+          : { role: "USER" as const, level: level === 1 ? 2 : 3 };
       potentialLeaders = await this.prisma.user.findMany({
-        where: { role: "REGIONAL_MANAGER", isActive: true },
+        where: { isActive: true, ...leaderFilter },
         select: { id: true, fullName: true, level: true },
       });
     } else {
+      // RM kendi subtree'sindeki kullanıcıları görebilir
       const subtreeIds = await this.teamService.getSubtreeIds(req.user.id);
+      const leaderLevel = level === 1 ? 2 : 3;
       potentialLeaders = await this.prisma.user.findMany({
-        where: { id: { in: Array.from(subtreeIds) }, isActive: true, level: level === 1 ? 2 : 3 },
+        where: { id: { in: Array.from(subtreeIds) }, isActive: true, role: "USER", level: leaderLevel },
         select: { id: true, fullName: true, level: true },
       });
     }
