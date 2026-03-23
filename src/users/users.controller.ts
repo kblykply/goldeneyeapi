@@ -20,7 +20,7 @@ import { AuthedUser } from "../auth/auth.types";
 import { Roles } from "../auth/roles.decorator";
 import { RolesGuard } from "../auth/roles.guard";
 import { Request } from "express";
-import { IsEnum, IsInt, IsOptional, IsString, Matches, Min, Max } from "class-validator";
+import { IsEnum, IsInt, IsNumber, IsOptional, IsString, Matches, Min, Max } from "class-validator";
 import { Role } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import * as fs from "fs";
@@ -52,6 +52,12 @@ class CreateUserDto {
   @IsOptional()
   @IsString()
   leaderId?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0.01)
+  @Max(1)
+  commissionRate?: number;
 }
 
 @Controller("users")
@@ -113,9 +119,14 @@ export class UsersController {
   ) {
     const creator = req.user;
 
-    // RM sadece USER oluşturabilir
-    if (creator.role === "REGIONAL_MANAGER" && body.role !== "USER") {
-      throw new ForbiddenException("Regional Manager yalnızca USER oluşturabilir");
+    // RM yalnızca USER ve SPECIAL oluşturabilir
+    const bodyRole = body.role as string;
+    if (
+      creator.role === "REGIONAL_MANAGER" &&
+      bodyRole !== "USER" &&
+      bodyRole !== "SPECIAL"
+    ) {
+      throw new ForbiddenException("Regional Manager yalnızca USER veya SPECIAL oluşturabilir");
     }
 
     // Telefon unique kontrolü
@@ -127,7 +138,7 @@ export class UsersController {
     let finalLeaderId: string | null = creator.id;
     let finalLevel = body.level ?? 0;
 
-    if (body.role === "USER") {
+    if (bodyRole === "USER") {
       if (!body.level || body.level < 1 || body.level > 3) {
         return { ok: false, message: "USER rolü için level (1-3) zorunlu" };
       }
@@ -142,8 +153,8 @@ export class UsersController {
             where: { id: body.leaderId },
             select: { id: true, role: true },
           });
-          if (!leader || leader.role !== "REGIONAL_MANAGER") {
-            return { ok: false, message: "Seçilen lider REGIONAL_MANAGER olmalı" };
+          if (!leader || (leader.role !== "REGIONAL_MANAGER" && (leader.role as string) !== "AGENCY")) {
+            return { ok: false, message: "Seçilen lider REGIONAL_MANAGER veya AGENCY olmalı" };
           }
           finalLeaderId = body.leaderId;
         } else {
@@ -189,8 +200,14 @@ export class UsersController {
 
         finalLeaderId = body.leaderId;
       }
+    } else if ((body.role as string) === "SPECIAL") {
+      if (!body.commissionRate) {
+        return { ok: false, message: "SPECIAL rolü için komisyon oranı gerekli" };
+      }
+      finalLevel = 0;
+      finalLeaderId = creator.id;
     } else {
-      // ADMIN veya REGIONAL_MANAGER oluşturuluyorsa level = 0, leaderId = creator
+      // ADMIN, REGIONAL_MANAGER, AGENCY: level = 0, leaderId = creator
       finalLevel = 0;
       finalLeaderId = creator.id;
     }
@@ -204,6 +221,9 @@ export class UsersController {
         level: finalLevel,
         leaderId: finalLeaderId,
         isActive: true,
+        ...(bodyRole === "SPECIAL" && body.commissionRate
+          ? { commissionRate: body.commissionRate }
+          : {}),
       },
       select: {
         id: true,
@@ -239,14 +259,17 @@ export class UsersController {
     if (req.user.role === "ADMIN") {
       // ADMIN tüm sistemi yönetir — subtree filtresi uygulanmaz
       // (eski kullanıcılarda leaderId null olabileceğinden subtree traversal çalışmaz)
-      const leaderFilter =
-        level === 3
-          ? { role: "REGIONAL_MANAGER" as const }
-          : { role: "USER" as const, level: level === 1 ? 2 : 3 };
-      potentialLeaders = await this.prisma.user.findMany({
-        where: { isActive: true, ...leaderFilter },
-        select: { id: true, fullName: true, level: true },
-      });
+      if (level === 3) {
+        potentialLeaders = await this.prisma.user.findMany({
+          where: { isActive: true, role: { in: ["REGIONAL_MANAGER", "AGENCY"] as any[] } },
+          select: { id: true, fullName: true, level: true },
+        });
+      } else {
+        potentialLeaders = await this.prisma.user.findMany({
+          where: { isActive: true, role: "USER", level: level === 1 ? 2 : 3 },
+          select: { id: true, fullName: true, level: true },
+        });
+      }
     } else {
       // RM kendi subtree'sindeki kullanıcıları görebilir
       const subtreeIds = await this.teamService.getSubtreeIds(req.user.id);

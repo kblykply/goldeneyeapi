@@ -70,7 +70,18 @@ export class TeamController {
 
     if (!rootUser) return { ok: false, message: "Root not found" };
 
-    const all: Array<{
+    const selectFields = {
+      id: true,
+      fullName: true,
+      phoneE164: true,
+      level: true,
+      role: true,
+      leaderId: true,
+      lastSeenAt: true,
+      avatarUrl: true,
+    } as const;
+
+    let all: Array<{
       id: string;
       fullName: string;
       phoneE164: string;
@@ -79,35 +90,43 @@ export class TeamController {
       leaderId: string | null;
       lastSeenAt: Date | null;
       avatarUrl: string | null;
-    }> = [rootUser];
+    }>;
 
-    let frontier = [actualRootId];
-    const visited = new Set(frontier);
-
-    while (frontier.length > 0) {
-      const children = await this.prisma.user.findMany({
-        where: { leaderId: { in: frontier } },
-        select: {
-          id: true,
-          fullName: true,
-          phoneE164: true,
-          level: true,
-          role: true,
-          leaderId: true,
-          lastSeenAt: true,
-          avatarUrl: true,
-        },
-      });
-
-      const next: string[] = [];
-      for (const u of children) {
-        if (!visited.has(u.id)) {
-          visited.add(u.id);
-          all.push(u);
-          next.push(u.id);
+    if (me.role === "ADMIN" && !rootId) {
+      // ADMIN: tüm kullanıcıları getir, leaderId = null olanları admin altına bağla
+      const everyone = await this.prisma.user.findMany({ select: selectFields });
+      // Admin dahil değilse ekle
+      const hasAdmin = everyone.some((u) => u.id === actualRootId);
+      all = hasAdmin ? everyone : [rootUser, ...everyone];
+      // leaderId = null olan veya leaderId geçerli bir kullanıcıya işaret etmeyen
+      // kullanıcıları admin'e bağla (admin kendisi hariç)
+      const idSet = new Set(all.map((u) => u.id));
+      for (const u of all) {
+        if (u.id !== actualRootId && (!u.leaderId || !idSet.has(u.leaderId))) {
+          u.leaderId = actualRootId;
         }
       }
-      frontier = next;
+    } else {
+      all = [rootUser];
+      let frontier = [actualRootId];
+      const visited = new Set(frontier);
+
+      while (frontier.length > 0) {
+        const children = await this.prisma.user.findMany({
+          where: { leaderId: { in: frontier } },
+          select: selectFields,
+        });
+
+        const next: string[] = [];
+        for (const u of children) {
+          if (!visited.has(u.id)) {
+            visited.add(u.id);
+            all.push(u);
+            next.push(u.id);
+          }
+        }
+        frontier = next;
+      }
     }
 
     const ids = all.map((u) => u.id);

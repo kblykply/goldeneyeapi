@@ -22,6 +22,8 @@ enum PaymentPlan {
 enum Role {
   ADMIN
   REGIONAL_MANAGER
+  AGENCY
+  SPECIAL
   AUTHORITY
   USER
 }
@@ -57,6 +59,8 @@ model User {
 
   lastSeenAt DateTime?
   avatarUrl  String?
+
+  commissionRate Float?   // only for SPECIAL role
 
   leaderId String?
   leader   User?   @relation("LeaderToDownline", fields: [leaderId], references: [id])
@@ -147,6 +151,17 @@ model Commission {
 
   @@index([contractId])
   @@index([userId])
+}
+
+model CommissionConfig {
+  id         String   @id @default(cuid())
+  updatedAt  DateTime @updatedAt
+
+  rmRate     Float    @default(0.225)
+  agencyRate Float    @default(0.20)
+  lvl3Rate   Float    @default(0.15)
+  lvl2Rate   Float    @default(0.125)
+  lvl1Rate   Float    @default(0.10)
 }
 
 enum CommissionStatus {

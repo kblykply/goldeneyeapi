@@ -1,4 +1,4 @@
-export type Role = "ADMIN" | "REGIONAL_MANAGER" | "AUTHORITY" | "USER";
+export type Role = "ADMIN" | "REGIONAL_MANAGER" | "AGENCY" | "SPECIAL" | "AUTHORITY" | "USER";
 
 export type AuthedUser = {
   id: string;

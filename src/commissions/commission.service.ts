@@ -1,29 +1,32 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 
-// Absolute commission rates by (effective) level
-const RATE_BY_LEVEL: Record<number, number> = {
-  1: 0.16,
-  2: 0.18,
-  3: 0.20,
-};
-
-// REGIONAL_MANAGER absolute rate (top of chain)
-const RM_RATE = 0.22;
-
 @Injectable()
 export class CommissionService {
   constructor(private prisma: PrismaService) {}
+
+  /**
+   * Singleton config — DB'den yükle, yoksa defaults ile oluştur.
+   */
+  private async getConfig() {
+    return this.prisma.commissionConfig.upsert({
+      where: { id: "singleton" },
+      create: { id: "singleton" },
+      update: {},
+    });
+  }
 
   /**
    * Call after Contract becomes APPROVED.
    * Idempotent per contract: if commissions already exist, it does nothing.
    *
    * Chain walks up from salesperson → leader → ... stopping at ADMIN.
-   * Delta rates:
-   *   L1 sells: L1=16%, L2=2%, L3=2%, RM=2%  → total 22%
-   *   L2 sells: L2=18%, L3=2%, RM=2%          → total 22%
-   *   L3 sells: L3=20%, RM=2%                 → total 22%
+   * Delta rates (default config):
+   *   L1 sells: L1=10%, L2=2.5%, L3=2.5%, RM=7.5%   → total 22.5%
+   *   L2 sells: L2=12.5%, L3=2.5%, RM=7.5%           → total 22.5%
+   *   L3 sells: L3=15%, RM=7.5%                       → total 22.5%
+   *   AGENCY subtree: same lvl rates, AGENCY=20% cap
+   *   SPECIAL: fixed rate + delta to creator up to rmRate
    */
   async calculateForApprovedContract(contractId: string) {
     const existing = await this.prisma.commission.count({
@@ -39,6 +42,7 @@ export class CommissionService {
     if (!contract) return { ok: false, message: "Contract not found" };
     if (contract.status !== "APPROVED") return { ok: false, message: "Contract not APPROVED" };
 
+    const config = await this.getConfig();
     const basePriceCents = contract.basePriceCents;
 
     let currentUserId: string | null = contract.salespersonId;
@@ -57,7 +61,7 @@ export class CommissionService {
 
       const u = await this.prisma.user.findUnique({
         where: { id: currentUserId },
-        select: { id: true, role: true, level: true, leaderId: true },
+        select: { id: true, role: true, level: true, leaderId: true, commissionRate: true },
       });
 
       if (!u) break;
@@ -69,11 +73,25 @@ export class CommissionService {
       let effectiveLevel: number;
 
       if (u.role === "REGIONAL_MANAGER") {
-        absoluteRate = RM_RATE; // %22
-        effectiveLevel = 4;     // RM'yi level 4 olarak sakla
+        absoluteRate = config.rmRate;
+        effectiveLevel = 4;
+      } else if (u.role === "AGENCY") {
+        absoluteRate = config.agencyRate;
+        effectiveLevel = 5;
+      } else if (u.role === "SPECIAL") {
+        absoluteRate = u.commissionRate ?? 0;
+        effectiveLevel = 6;
+        // SPECIAL için break YOK — zincir creator'a devam eder
       } else {
-        effectiveLevel = u.level >= 3 ? 3 : u.level;
-        absoluteRate = RATE_BY_LEVEL[effectiveLevel];
+        // USER
+        const lvl = u.level >= 3 ? 3 : u.level;
+        const rateMap: Record<number, number> = {
+          1: config.lvl1Rate,
+          2: config.lvl2Rate,
+          3: config.lvl3Rate,
+        };
+        absoluteRate = rateMap[lvl];
+        effectiveLevel = lvl;
         if (!absoluteRate) {
           currentUserId = u.leaderId ?? null;
           continue;
@@ -99,8 +117,8 @@ export class CommissionService {
         lastPaidAbsoluteRate = absoluteRate;
       }
 
-      // RM'den sonra zincir durur (ADMIN komisyon almaz zaten)
-      if (u.role === "REGIONAL_MANAGER") break;
+      // RM ve AGENCY'den sonra zincir durur
+      if (u.role === "REGIONAL_MANAGER" || u.role === "AGENCY") break;
 
       currentUserId = u.leaderId ?? null;
     }
