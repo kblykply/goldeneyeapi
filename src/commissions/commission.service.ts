@@ -8,12 +8,12 @@ export class CommissionService {
   /**
    * Singleton config — DB'den yükle, yoksa defaults ile oluştur.
    */
-  private async getConfig() {
-    return this.prisma.commissionConfig.upsert({
+  async getConfig() {
+    const existing = await this.prisma.commissionConfig.findUnique({
       where: { id: "singleton" },
-      create: { id: "singleton" },
-      update: {},
     });
+    if (existing) return existing;
+    return this.prisma.commissionConfig.create({ data: { id: "singleton" } });
   }
 
   /**

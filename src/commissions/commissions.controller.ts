@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import { IsNumber, IsOptional, Max, Min } from "class-validator";
 import { PrismaService } from "../prisma/prisma.service";
+import { CommissionService } from "./commission.service";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import { TeamService } from "../team/team.service";
@@ -17,7 +18,7 @@ class UpdateConfigDto {
 
 @Controller("commissions")
 export class CommissionsController {
-  constructor(private prisma: PrismaService, private team: TeamService) {}
+  constructor(private prisma: PrismaService, private team: TeamService, private commissionService: CommissionService) {}
 
   /**
    * GET /commissions/config (ADMIN only)
@@ -25,11 +26,7 @@ export class CommissionsController {
   @Get("config")
   async getConfig(@Req() req: Request & { user: AuthedUser }) {
     if (req.user.role !== "ADMIN") return { ok: false, message: "Yetkisiz" };
-    const config = await this.prisma.commissionConfig.upsert({
-      where: { id: "singleton" },
-      create: { id: "singleton" },
-      update: {},
-    });
+    const config = await this.commissionService.getConfig();
     return { ok: true, config };
   }
 
