@@ -12,6 +12,7 @@ import { IsString, MinLength } from 'class-validator';
 import * as bcrypt from 'bcrypt';
 import { AuthedUser } from './auth.types';
 import { SkipAuth } from './skip-auth.decorator';
+import { DEFAULT_PASSWORD } from './auth.constants';
 
 class LoginDto {
   @IsString()
@@ -25,6 +26,20 @@ class LoginDto {
 class RefreshDto {
   @IsString()
   refreshToken!: string;
+}
+
+class CheckPhoneDto {
+  @IsString()
+  phoneE164!: string;
+}
+
+class SetInitialPasswordDto {
+  @IsString()
+  phoneE164!: string;
+
+  @IsString()
+  @MinLength(4)
+  newPassword!: string;
 }
 
 @Controller('auth')
@@ -59,6 +74,54 @@ export class AuthController {
     );
 
     return { accessToken, refreshToken };
+  }
+
+  @SkipAuth()
+  @Post('check-phone')
+  async checkPhone(@Body() body: CheckPhoneDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { phoneE164: body.phoneE164 },
+      select: { password: true },
+    });
+
+    if (!user) return { ok: true, exists: false };
+
+    const firstLogin = await bcrypt.compare(DEFAULT_PASSWORD, user.password);
+    return { ok: true, exists: true, firstLogin };
+  }
+
+  @SkipAuth()
+  @Post('set-initial-password')
+  async setInitialPassword(@Body() body: SetInitialPasswordDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { phoneE164: body.phoneE164 },
+    });
+
+    if (!user) throw new UnauthorizedException('Kullanıcı bulunamadı');
+
+    const isDefault = await bcrypt.compare(DEFAULT_PASSWORD, user.password);
+    if (!isDefault) {
+      return { ok: false, message: 'Şifre zaten değiştirilmiş' };
+    }
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { password: await bcrypt.hash(body.newPassword, 10) },
+    });
+
+    const tokens = await this.issueTokens(user.id);
+
+    return {
+      ok: true,
+      ...tokens,
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        role: user.role,
+        level: user.level,
+        avatarUrl: user.avatarUrl ?? null,
+      },
+    };
   }
 
   @SkipAuth()
@@ -159,5 +222,4 @@ export class AuthController {
 
     return { ok: true };
   }
-
 }

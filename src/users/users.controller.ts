@@ -20,10 +20,11 @@ import { AuthedUser } from "../auth/auth.types";
 import { Roles } from "../auth/roles.decorator";
 import { RolesGuard } from "../auth/roles.guard";
 import { Request } from "express";
-import { IsEnum, IsInt, IsOptional, IsString, Matches, Min, Max, MinLength } from "class-validator";
+import { IsEnum, IsInt, IsOptional, IsString, Matches, Min, Max } from "class-validator";
 import { Role } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import * as fs from "fs";
+import { DEFAULT_PASSWORD } from "../auth/auth.constants";
 
 function ensureDir(path: string) {
   if (!fs.existsSync(path)) fs.mkdirSync(path, { recursive: true });
@@ -38,10 +39,6 @@ class CreateUserDto {
   @IsString()
   @Matches(/^\+\d{10,15}$/)
   phoneE164!: string;
-
-  @IsString()
-  @MinLength(4)
-  password!: string;
 
   @IsEnum(Role)
   role!: Role;
@@ -136,8 +133,27 @@ export class UsersController {
       }
 
       if (body.level === 3) {
-        // Direkt creator altına
-        finalLeaderId = creator.id;
+        if (creator.role === "ADMIN") {
+          // ADMIN oluşturuyorsa hangi RM'nin altına ekleneceği seçilmeli
+          if (!body.leaderId) {
+            return { ok: false, message: "lvl 3 için Regional Manager seçilmeli" };
+          }
+          const leader = await this.prisma.user.findUnique({
+            where: { id: body.leaderId },
+            select: { id: true, role: true },
+          });
+          if (!leader || leader.role !== "REGIONAL_MANAGER") {
+            return { ok: false, message: "Seçilen lider REGIONAL_MANAGER olmalı" };
+          }
+          const subtree = await this.teamService.getSubtreeIds(creator.id);
+          if (!subtree.has(body.leaderId)) {
+            return { ok: false, message: "Seçilen RM sizin ekibinizde değil" };
+          }
+          finalLeaderId = body.leaderId;
+        } else {
+          // RM oluşturuyorsa direkt kendi altına
+          finalLeaderId = creator.id;
+        }
       } else {
         // level 2 veya 1: leaderId seçilmeli
         if (!body.leaderId) {
@@ -185,7 +201,7 @@ export class UsersController {
       data: {
         fullName: body.fullName,
         phoneE164: body.phoneE164,
-        password: await bcrypt.hash(body.password, 10),
+        password: await bcrypt.hash(DEFAULT_PASSWORD, 10),
         role: body.role,
         level: finalLevel,
         leaderId: finalLeaderId,
@@ -213,37 +229,40 @@ export class UsersController {
     @Req() req: Request & { user: AuthedUser }
   ) {
     const level = parseInt(levelStr, 10);
-    if (level !== 1 && level !== 2) {
-      return { ok: false, message: "level 1 veya 2 olmalı" };
+    if (level !== 1 && level !== 2 && level !== 3) {
+      return { ok: false, message: "level 1, 2 veya 3 olmalı" };
     }
-
-    // Yeni user'ın level'ı = 1 → lider level = 2
-    // Yeni user'ın level'ı = 2 → lider level = 3
-    const leaderLevel = level === 1 ? 2 : 3;
 
     const subtreeIds = await this.teamService.getSubtreeIds(req.user.id);
 
+    // level=3 → lider REGIONAL_MANAGER (role bazlı)
+    // level=2 → lider level=3 USER
+    // level=1 → lider level=2 USER
+    const leaderFilter =
+      level === 3
+        ? { role: "REGIONAL_MANAGER" as const }
+        : { level: level === 1 ? 2 : 3 };
+
     const potentialLeaders = await this.prisma.user.findMany({
-      where: {
-        id: { in: Array.from(subtreeIds) },
-        level: leaderLevel,
-        isActive: true,
-      },
+      where: { id: { in: Array.from(subtreeIds) }, isActive: true, ...leaderFilter },
       select: { id: true, fullName: true, level: true },
     });
 
-    const candidates = await Promise.all(
-      potentialLeaders.map(async (u) => {
-        const usedSlots = await this.prisma.user.count({
-          where: { leaderId: u.id },
-        });
-        return { ...u, usedSlots };
-      })
-    );
+    const slotCounts = await this.prisma.user.groupBy({
+      by: ["leaderId"],
+      where: { leaderId: { in: potentialLeaders.map((u) => u.id) } },
+      _count: { id: true },
+    });
+    const slotMap = new Map(slotCounts.map((r) => [r.leaderId, r._count.id]));
+
+    const candidates = potentialLeaders.map((u) => ({
+      ...u,
+      usedSlots: slotMap.get(u.id) ?? 0,
+    }));
 
     return {
       ok: true,
-      candidates: candidates.filter((c) => c.usedSlots < 3),
+      candidates: level === 3 ? candidates : candidates.filter((c) => c.usedSlots < 3),
     };
   }
 }
