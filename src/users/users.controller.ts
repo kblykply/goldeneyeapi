@@ -145,10 +145,6 @@ export class UsersController {
           if (!leader || leader.role !== "REGIONAL_MANAGER") {
             return { ok: false, message: "Seçilen lider REGIONAL_MANAGER olmalı" };
           }
-          const subtree = await this.teamService.getSubtreeIds(creator.id);
-          if (!subtree.has(body.leaderId)) {
-            return { ok: false, message: "Seçilen RM sizin ekibinizde değil" };
-          }
           finalLeaderId = body.leaderId;
         } else {
           // RM oluşturuyorsa direkt kendi altına
@@ -233,20 +229,24 @@ export class UsersController {
       return { ok: false, message: "level 1, 2 veya 3 olmalı" };
     }
 
-    const subtreeIds = await this.teamService.getSubtreeIds(req.user.id);
-
     // level=3 → lider REGIONAL_MANAGER (role bazlı)
     // level=2 → lider level=3 USER
     // level=1 → lider level=2 USER
-    const leaderFilter =
-      level === 3
-        ? { role: "REGIONAL_MANAGER" as const }
-        : { level: level === 1 ? 2 : 3 };
+    let potentialLeaders: { id: string; fullName: string; level: number }[];
 
-    const potentialLeaders = await this.prisma.user.findMany({
-      where: { id: { in: Array.from(subtreeIds) }, isActive: true, ...leaderFilter },
-      select: { id: true, fullName: true, level: true },
-    });
+    if (level === 3) {
+      // ADMIN tüm RM'leri görebilir (eski kullanıcıların leaderId'si null olabilir)
+      potentialLeaders = await this.prisma.user.findMany({
+        where: { role: "REGIONAL_MANAGER", isActive: true },
+        select: { id: true, fullName: true, level: true },
+      });
+    } else {
+      const subtreeIds = await this.teamService.getSubtreeIds(req.user.id);
+      potentialLeaders = await this.prisma.user.findMany({
+        where: { id: { in: Array.from(subtreeIds) }, isActive: true, level: level === 1 ? 2 : 3 },
+        select: { id: true, fullName: true, level: true },
+      });
+    }
 
     const slotCounts = await this.prisma.user.groupBy({
       by: ["leaderId"],
