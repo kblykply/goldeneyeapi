@@ -117,8 +117,8 @@ export class CommissionService {
         lastPaidAbsoluteRate = absoluteRate;
       }
 
-      // RM ve AGENCY'den sonra zincir durur
-      if (u.role === "REGIONAL_MANAGER" || u.role === "AGENCY") break;
+      // RM'den sonra zincir durur; AGENCY'den sonra devam eder (RM'ye delta gider)
+      if (u.role === "REGIONAL_MANAGER") break;
 
       currentUserId = u.leaderId ?? null;
     }

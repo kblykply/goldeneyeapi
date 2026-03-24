@@ -119,14 +119,15 @@ export class UsersController {
   ) {
     const creator = req.user;
 
-    // RM yalnızca USER ve SPECIAL oluşturabilir
+    // RM yalnızca USER, SPECIAL ve AGENCY oluşturabilir
     const bodyRole = body.role as string;
     if (
       creator.role === "REGIONAL_MANAGER" &&
       bodyRole !== "USER" &&
-      bodyRole !== "SPECIAL"
+      bodyRole !== "SPECIAL" &&
+      bodyRole !== "AGENCY"
     ) {
-      throw new ForbiddenException("Regional Manager yalnızca USER veya SPECIAL oluşturabilir");
+      throw new ForbiddenException("Regional Manager yalnızca USER, SPECIAL veya AGENCY oluşturabilir");
     }
 
     // Telefon unique kontrolü
