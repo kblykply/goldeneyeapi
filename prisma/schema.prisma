@@ -82,6 +82,7 @@ model User {
 
   commissions   Commission[]
   refreshTokens RefreshToken[]
+  contractNotes ContractNote[] @relation("ContractNoteAuthor")
 }
 
 model Customer {
@@ -218,6 +219,7 @@ model Contract {
 
   commissions       Commission[]
   customPaymentPlan CustomPaymentPlan?
+  notes             ContractNote[]
 }
 
 model CustomPaymentPlan {
@@ -336,3 +338,17 @@ model RefreshToken {
   @@index([expiresAt])
 }
 
+model ContractNote {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id])
+
+  authorId String
+  author   User   @relation("ContractNoteAuthor", fields: [authorId], references: [id])
+
+  body String
+
+  @@index([contractId])
+}

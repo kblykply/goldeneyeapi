@@ -35,6 +35,11 @@ class RejectDto {
   reason!: string;
 }
 
+class CreateNoteDto {
+  @IsString()
+  body!: string;
+}
+
 class CreateInstallmentDto {
   @IsDateString()
   dueDate!: string;
@@ -346,6 +351,16 @@ export class ContractsController {
             },
           },
         },
+        notes: {
+          select: {
+            id: true,
+            createdAt: true,
+            body: true,
+            author: { select: { id: true, fullName: true, role: true } },
+          },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+        },
       },
     });
 
@@ -360,6 +375,47 @@ export class ContractsController {
     }
 
     return { ok: false, message: "Yetkisiz" };
+  }
+
+  /**
+   * POST /contracts/:id/notes
+   * Add a note to a contract (same access rules as GET /contracts/:id)
+   */
+  @Post(":id/notes")
+  async addNote(
+    @Param("id") id: string,
+    @Body() dto: CreateNoteDto,
+    @Req() req: Request & { user: AuthedUser }
+  ) {
+    const me = req.user;
+    const noteBody = dto.body.trim();
+    if (!noteBody) return { ok: false, message: "Not içeriği boş olamaz" };
+
+    const c = await this.prisma.contract.findUnique({
+      where: { id },
+      select: { id: true, salespersonId: true },
+    });
+    if (!c) return { ok: false, message: "Sözleşme bulunamadı" };
+
+    const canAccess =
+      me.role === "ADMIN" ||
+      me.role === "AUTHORITY" ||
+      c.salespersonId === me.id ||
+      (me.role === "REGIONAL_MANAGER" && (await this.team.getSubtreeIds(me.id)).has(c.salespersonId));
+
+    if (!canAccess) return { ok: false, message: "Yetkisiz" };
+
+    const note = await this.prisma.contractNote.create({
+      data: { contractId: id, authorId: me.id, body: noteBody },
+      select: {
+        id: true,
+        createdAt: true,
+        body: true,
+        author: { select: { id: true, fullName: true, role: true } },
+      },
+    });
+
+    return { ok: true, note };
   }
 
   /**
