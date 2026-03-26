@@ -158,6 +158,7 @@ model CommissionConfig {
   updatedAt  DateTime @updatedAt
 
   rmRate     Float    @default(0.225)
+  adminRate  Float    @default(0.26)
   agencyRate Float    @default(0.20)
   lvl3Rate   Float    @default(0.15)
   lvl2Rate   Float    @default(0.125)

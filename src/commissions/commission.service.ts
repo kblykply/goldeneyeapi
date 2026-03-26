@@ -22,9 +22,9 @@ export class CommissionService {
    *
    * Chain walks up from salesperson → leader → ... stopping at ADMIN.
    * Delta rates (default config):
-   *   L1 sells: L1=10%, L2=2.5%, L3=2.5%, RM=7.5%   → total 22.5%
-   *   L2 sells: L2=12.5%, L3=2.5%, RM=7.5%           → total 22.5%
-   *   L3 sells: L3=15%, RM=7.5%                       → total 22.5%
+   *   L1 sells: L1=10%, L2=2.5%, L3=2.5%, RM=7.5%, ADMIN=3.5% → total 26%
+   *   L2 sells: L2=12.5%, L3=2.5%, RM=7.5%, ADMIN=3.5%       → total 26%
+   *   L3 sells: L3=15%, RM=7.5%, ADMIN=3.5%                   → total 26%
    *   AGENCY subtree: same lvl rates, AGENCY=20% cap
    *   SPECIAL: fixed rate + delta to creator up to rmRate
    */
@@ -66,15 +66,15 @@ export class CommissionService {
 
       if (!u) break;
 
-      // ADMIN komisyon almaz, zincir durur
-      if (u.role === "ADMIN") break;
-
       let absoluteRate: number;
       let effectiveLevel: number;
 
       if (u.role === "REGIONAL_MANAGER") {
         absoluteRate = config.rmRate;
         effectiveLevel = 4;
+      } else if (u.role === "ADMIN") {
+        absoluteRate = config.adminRate;
+        effectiveLevel = 7;
       } else if (u.role === "AGENCY") {
         absoluteRate = config.agencyRate;
         effectiveLevel = 5;
@@ -117,8 +117,8 @@ export class CommissionService {
         lastPaidAbsoluteRate = absoluteRate;
       }
 
-      // RM'den sonra zincir durur; AGENCY'den sonra devam eder (RM'ye delta gider)
-      if (u.role === "REGIONAL_MANAGER") break;
+      // ADMIN'den sonra zincir durur; RM'den sonra ADMIN'e devam eder
+      if (u.role === "ADMIN") break;
 
       currentUserId = u.leaderId ?? null;
     }

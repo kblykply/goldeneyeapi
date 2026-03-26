@@ -10,6 +10,7 @@ const ALLOWED_STATUS = new Set(["PENDING", "PAYABLE", "PAID"]);
 
 class UpdateConfigDto {
   @IsOptional() @IsNumber() @Min(0) @Max(1) rmRate?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) adminRate?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(1) agencyRate?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(1) lvl3Rate?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(1) lvl2Rate?: number;
@@ -41,6 +42,7 @@ export class CommissionsController {
     if (req.user.role !== "ADMIN") return { ok: false, message: "Yetkisiz" };
     const data: Record<string, number> = {};
     if (body.rmRate !== undefined) data.rmRate = body.rmRate;
+    if (body.adminRate !== undefined) data.adminRate = body.adminRate;
     if (body.agencyRate !== undefined) data.agencyRate = body.agencyRate;
     if (body.lvl3Rate !== undefined) data.lvl3Rate = body.lvl3Rate;
     if (body.lvl2Rate !== undefined) data.lvl2Rate = body.lvl2Rate;

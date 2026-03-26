@@ -4,6 +4,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Logger,
   Post,
   Query,
   Req,
@@ -16,6 +17,7 @@ import { diskStorage } from "multer";
 import { extname } from "path";
 import { PrismaService } from "../prisma/prisma.service";
 import { TeamService } from "../team/team.service";
+import { SmsService } from "../sms/sms.service";
 import { AuthedUser } from "../auth/auth.types";
 import { Roles } from "../auth/roles.decorator";
 import { RolesGuard } from "../auth/roles.guard";
@@ -62,9 +64,12 @@ class CreateUserDto {
 
 @Controller("users")
 export class UsersController {
+  private readonly logger = new Logger(UsersController.name);
+
   constructor(
     private prisma: PrismaService,
     private teamService: TeamService,
+    private smsService: SmsService,
   ) {}
 
   @Post("me/avatar")
@@ -236,6 +241,8 @@ export class UsersController {
         avatarUrl: true,
       },
     });
+
+    this.smsService.sendWelcomeWhatsApp(user.phoneE164, user.fullName).catch((err) => this.logger.warn(`Welcome WhatsApp failed: ${err?.message}`));
 
     return { ok: true, user };
   }

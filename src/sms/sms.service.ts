@@ -8,6 +8,8 @@ export class SmsService {
   private verifySid: string;
   private whatsappFrom: string;
   private contentSid: string;
+  private welcomeContentSid: string;
+  private appUrl: string;
 
   constructor(private config: ConfigService) {
     const sid = this.config.get<string>("TWILIO_ACCOUNT_SID") ?? "";
@@ -15,6 +17,8 @@ export class SmsService {
     this.verifySid = this.config.get<string>("TWILIO_VERIFY_SID") ?? "";
     this.whatsappFrom = this.config.get<string>("TWILIO_WHATSAPP_FROM") ?? "";
     this.contentSid = this.config.get<string>("TWILIO_CONTENT_SID") ?? "";
+    this.welcomeContentSid = this.config.get<string>("TWILIO_WELCOME_CONTENT_SID") ?? "";
+    this.appUrl = this.config.get<string>("APP_URL") ?? "";
 
     this.client = Twilio(sid || "", token || "");
   }
@@ -33,13 +37,17 @@ export class SmsService {
     return { valid: check.status === "approved" };
   }
 
-  async sendWhatsApp(toE164: string, variables: Record<string, string>) {
+  async sendWhatsApp(toE164: string, variables: Record<string, string>, contentSid = this.contentSid) {
     const msg = await this.client.messages.create({
       from: this.whatsappFrom,
       to: `whatsapp:${toE164}`,
-      contentSid: this.contentSid,
+      contentSid,
       contentVariables: JSON.stringify(variables),
     });
     return { sid: msg.sid, status: msg.status };
+  }
+
+  async sendWelcomeWhatsApp(toE164: string, fullName: string) {
+    return this.sendWhatsApp(toE164, { "1": fullName, "2": this.appUrl }, this.welcomeContentSid);
   }
 }
