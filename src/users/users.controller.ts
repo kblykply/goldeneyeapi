@@ -159,8 +159,8 @@ export class UsersController {
             where: { id: body.leaderId },
             select: { id: true, role: true },
           });
-          if (!leader || (leader.role !== "REGIONAL_MANAGER" && (leader.role as string) !== "AGENCY")) {
-            return { ok: false, message: "Seçilen lider REGIONAL_MANAGER veya AGENCY olmalı" };
+          if (!leader || (leader.role !== "REGIONAL_MANAGER" && (leader.role as string) !== "AGENCY" && (leader.role as string) !== "REGIONAL_LEADER")) {
+            return { ok: false, message: "Seçilen lider REGIONAL_MANAGER, REGIONAL_LEADER veya AGENCY olmalı" };
           }
           finalLeaderId = body.leaderId;
         } else {
@@ -269,7 +269,7 @@ export class UsersController {
       // (eski kullanıcılarda leaderId null olabileceğinden subtree traversal çalışmaz)
       if (level === 3) {
         potentialLeaders = await this.prisma.user.findMany({
-          where: { isActive: true, role: { in: ["REGIONAL_MANAGER", "AGENCY"] as any[] } },
+          where: { isActive: true, role: { in: ["REGIONAL_MANAGER", "AGENCY", "REGIONAL_LEADER"] as any[] } },
           select: { id: true, fullName: true, level: true },
         });
       } else {

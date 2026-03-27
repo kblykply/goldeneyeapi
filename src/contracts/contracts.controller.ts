@@ -369,7 +369,7 @@ export class ContractsController {
     if (me.role === "ADMIN" || me.role === "AUTHORITY") return { ok: true, contract: c };
     if (c.salespersonId === me.id) return { ok: true, contract: c };
 
-    if (me.role === "REGIONAL_MANAGER") {
+    if (me.role === "REGIONAL_MANAGER" || (me.role as string) === "REGIONAL_LEADER") {
       const subtree = await this.team.getSubtreeIds(me.id);
       if (subtree.has(c.salespersonId)) return { ok: true, contract: c };
     }
@@ -401,7 +401,7 @@ export class ContractsController {
       me.role === "ADMIN" ||
       me.role === "AUTHORITY" ||
       c.salespersonId === me.id ||
-      (me.role === "REGIONAL_MANAGER" && (await this.team.getSubtreeIds(me.id)).has(c.salespersonId));
+      ((me.role === "REGIONAL_MANAGER" || (me.role as string) === "REGIONAL_LEADER") && (await this.team.getSubtreeIds(me.id)).has(c.salespersonId));
 
     if (!canAccess) return { ok: false, message: "Yetkisiz" };
 
@@ -439,7 +439,7 @@ export class ContractsController {
       c.salespersonId === me.id ||
       me.role === "ADMIN" ||
       me.role === "AUTHORITY" ||
-      (me.role === "REGIONAL_MANAGER" && (await this.team.getSubtreeIds(me.id)).has(c.salespersonId));
+      ((me.role === "REGIONAL_MANAGER" || (me.role as string) === "REGIONAL_LEADER") && (await this.team.getSubtreeIds(me.id)).has(c.salespersonId));
 
     if (!canAccess) return { ok: false, message: "Yetkisiz" };
 
@@ -458,7 +458,7 @@ export class ContractsController {
         select: { id: true, fullName: true, phoneE164: true, role: true, leaderId: true },
       });
       if (!leader) break;
-      if (leader.role === "REGIONAL_MANAGER") {
+      if (leader.role === "REGIONAL_MANAGER" || (leader.role as string) === "REGIONAL_LEADER") {
         regionalManager = { fullName: leader.fullName, phoneE164: leader.phoneE164 };
         break;
       }

@@ -72,6 +72,9 @@ export class CommissionService {
       if (u.role === "REGIONAL_MANAGER") {
         absoluteRate = config.rmRate;
         effectiveLevel = 4;
+      } else if ((u.role as string) === "REGIONAL_LEADER") {
+        absoluteRate = (config as any).rlRate;
+        effectiveLevel = 4;
       } else if (u.role === "ADMIN") {
         absoluteRate = config.adminRate;
         effectiveLevel = 7;

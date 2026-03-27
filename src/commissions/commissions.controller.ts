@@ -99,15 +99,16 @@ export class CommissionsController {
   ) {
     const me = req.user;
 
-    // Only leader-ish users (level >= 2), REGIONAL_MANAGER, AGENCY, ADMIN, or AUTHORITY can view team
+    // Only leader-ish users (level >= 2), REGIONAL_MANAGER, REGIONAL_LEADER, AGENCY, ADMIN, or AUTHORITY can view team
     if (
       me.role !== "ADMIN" &&
       me.role !== "AUTHORITY" &&
       me.role !== "REGIONAL_MANAGER" &&
+      (me.role as string) !== "REGIONAL_LEADER" &&
       (me.role as string) !== "AGENCY" &&
       me.level < 2
     ) {
-      return { ok: false, message: "Yetkisiz (Leader L2+ veya Admin/Authority/RM/Agency)" };
+      return { ok: false, message: "Yetkisiz (Leader L2+ veya Admin/Authority/RM/RL/Agency)" };
     }
 
     const st = ALLOWED_STATUS.has(status ?? "") ? (status as any) : undefined;

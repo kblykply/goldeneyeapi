@@ -22,6 +22,7 @@ enum PaymentPlan {
 enum Role {
   ADMIN
   REGIONAL_MANAGER
+  REGIONAL_LEADER
   AGENCY
   SPECIAL
   AUTHORITY
@@ -159,6 +160,7 @@ model CommissionConfig {
   updatedAt  DateTime @updatedAt
 
   rmRate     Float    @default(0.225)
+  rlRate     Float    @default(0.20)
   adminRate  Float    @default(0.26)
   agencyRate Float    @default(0.20)
   lvl3Rate   Float    @default(0.15)

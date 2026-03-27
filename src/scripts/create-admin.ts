@@ -30,9 +30,9 @@ function parseArgs(): Args {
     throw new Error("phone must be E.164 format, example: +905551112233");
   }
 
-  const roleValues = new Set<Role>(["ADMIN", "REGIONAL_MANAGER", "AUTHORITY", "USER"]);
+  const roleValues = new Set<Role>(["ADMIN", "REGIONAL_MANAGER", "REGIONAL_LEADER", "AUTHORITY", "USER"]);
   if (!roleValues.has(roleRaw as Role)) {
-    throw new Error("Invalid role. Allowed: ADMIN, REGIONAL_MANAGER, AUTHORITY, USER");
+    throw new Error("Invalid role. Allowed: ADMIN, REGIONAL_MANAGER, REGIONAL_LEADER, AUTHORITY, USER");
   }
 
   const level = Number(levelRaw);
