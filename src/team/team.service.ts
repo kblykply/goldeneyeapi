@@ -12,7 +12,7 @@ export class TeamService {
 
     while (frontier.length > 0) {
       const children = await this.prisma.user.findMany({
-        where: { leaderId: { in: frontier } },
+        where: { leaderId: { in: frontier }, isActive: true },
         select: { id: true },
       });
 

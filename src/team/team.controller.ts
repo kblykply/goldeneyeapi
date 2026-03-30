@@ -94,7 +94,7 @@ export class TeamController {
 
     if (me.role === "ADMIN" && !rootId) {
       // ADMIN: tüm kullanıcıları getir, leaderId = null olanları admin altına bağla
-      const everyone = await this.prisma.user.findMany({ select: selectFields });
+      const everyone = await this.prisma.user.findMany({ where: { isActive: true }, select: selectFields });
       // Admin dahil değilse ekle
       const hasAdmin = everyone.some((u) => u.id === actualRootId);
       all = hasAdmin ? everyone : [rootUser, ...everyone];
@@ -113,7 +113,7 @@ export class TeamController {
 
       while (frontier.length > 0) {
         const children = await this.prisma.user.findMany({
-          where: { leaderId: { in: frontier } },
+          where: { leaderId: { in: frontier }, isActive: true },
           select: selectFields,
         });
 

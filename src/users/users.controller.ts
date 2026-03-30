@@ -2,9 +2,12 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Logger,
+  Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -22,7 +25,7 @@ import { AuthedUser } from "../auth/auth.types";
 import { Roles } from "../auth/roles.decorator";
 import { RolesGuard } from "../auth/roles.guard";
 import { Request } from "express";
-import { IsEnum, IsInt, IsNumber, IsOptional, IsString, Matches, Min, Max } from "class-validator";
+import { IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Matches, Min, Max } from "class-validator";
 import { Role } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import * as fs from "fs";
@@ -33,6 +36,41 @@ function ensureDir(path: string) {
 }
 
 const AVATAR_DIR = "uploads/avatars";
+
+class UpdateUserDto {
+  @IsOptional()
+  @IsString()
+  fullName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\+\d{10,15}$/)
+  phoneE164?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  @IsOptional()
+  @IsEnum(Role)
+  role?: Role;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(3)
+  level?: number;
+
+  @IsOptional()
+  @IsString()
+  leaderId?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0.01)
+  @Max(1)
+  commissionRate?: number;
+}
 
 class CreateUserDto {
   @IsString()
@@ -304,5 +342,80 @@ export class UsersController {
       ok: true,
       candidates: level === 3 ? candidates : candidates.filter((c) => c.usedSlots < 3),
     };
+  }
+
+  @Patch(":id")
+  @UseGuards(RolesGuard)
+  @Roles("ADMIN")
+  async updateUser(
+    @Param("id") id: string,
+    @Body() body: UpdateUserDto
+  ) {
+    const patch = Object.fromEntries(
+      Object.entries({
+        fullName: body.fullName,
+        phoneE164: body.phoneE164,
+        isActive: body.isActive,
+        role: body.role,
+        level: body.level,
+        leaderId: body.leaderId,
+        commissionRate: body.commissionRate,
+      }).filter(([, v]) => v !== undefined)
+    );
+
+    try {
+      const user = await this.prisma.user.update({
+        where: { id },
+        data: patch,
+        select: {
+          id: true,
+          fullName: true,
+          phoneE164: true,
+          role: true,
+          level: true,
+          leaderId: true,
+          isActive: true,
+          avatarUrl: true,
+        },
+      });
+      return { ok: true, user };
+    } catch (e: any) {
+      if (e.code === "P2025") return { ok: false, message: "Kullanıcı bulunamadı" };
+      if (e.code === "P2002") return { ok: false, message: "Bu telefon numarası zaten kayıtlı" };
+      throw e;
+    }
+  }
+
+  @Delete(":id")
+  @UseGuards(RolesGuard)
+  @Roles("ADMIN")
+  async deleteUser(
+    @Param("id") id: string,
+    @Req() req: Request & { user: AuthedUser }
+  ) {
+    if (req.user.id === id) {
+      return { ok: false, message: "Kendinizi silemezsiniz" };
+    }
+
+    const activeDownline = await this.prisma.user.count({
+      where: { leaderId: id, isActive: true },
+    });
+    if (activeDownline > 0) {
+      return {
+        ok: false,
+        message: "Bu kullanıcının aktif ekip üyeleri var. Önce onları başka bir lidere atayın.",
+      };
+    }
+
+    try {
+      await this.prisma.user.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      return { ok: true };
+    } catch (e: any) {
+      if (e.code === "P2025") return { ok: false, message: "Kullanıcı bulunamadı" };
+      throw e;
+    }
   }
 }
