@@ -80,6 +80,37 @@ export class MeController {
     };
   }
 
+  // GET /me/presentations?status=ENDED
+  @Get("presentations")
+  async myPresentations(
+    @Req() req: Request & { user: AuthedUser },
+    @Query("status") status?: string,
+  ) {
+    const me = req.user;
+
+    const validStatuses = new Set(["CREATED", "OTP_SENT", "OPENED", "ENDED"]);
+    const where: any = { salespersonId: me.id };
+    if (status && validStatuses.has(status)) where.status = status;
+
+    const items = await this.prisma.presentation.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      select: {
+        id: true,
+        createdAt: true,
+        status: true,
+        unitType: true,
+        weekOfYear: true,
+        durationSec: true,
+        endedAt: true,
+        customer: { select: { id: true, fullName: true, phoneE164: true } },
+      },
+    });
+
+    return { ok: true, items };
+  }
+
   // GET /me/contracts?status=APPROVED
   @Get("contracts")
   async myContracts(
