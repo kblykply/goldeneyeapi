@@ -5,27 +5,18 @@ import { PrismaService } from "../prisma/prisma.service";
 export class TeamService {
   constructor(private prisma: PrismaService) {}
 
-  // returns all user ids in subtree (root included)
+  // returns all user ids in subtree (root included) — single recursive CTE query
   async getSubtreeIds(rootId: string): Promise<Set<string>> {
-    const visited = new Set<string>([rootId]);
-    let frontier = [rootId];
-
-    while (frontier.length > 0) {
-      const children = await this.prisma.user.findMany({
-        where: { leaderId: { in: frontier }, isActive: true },
-        select: { id: true },
-      });
-
-      const next: string[] = [];
-      for (const c of children) {
-        if (!visited.has(c.id)) {
-          visited.add(c.id);
-          next.push(c.id);
-        }
-      }
-      frontier = next;
-    }
-
-    return visited;
+    const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+      WITH RECURSIVE subtree AS (
+        SELECT id FROM "User" WHERE id = ${rootId}
+        UNION ALL
+        SELECT u.id FROM "User" u
+        INNER JOIN subtree s ON u."leaderId" = s.id
+        WHERE u."isActive" = true
+      )
+      SELECT id FROM subtree
+    `;
+    return new Set(rows.map((r) => r.id));
   }
 }
