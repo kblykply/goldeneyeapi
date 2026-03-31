@@ -19,6 +19,7 @@ import { SmsModule } from "./sms/sms.module";
 
 import { CurrencyModule } from "./currency/currency.module";
 import { WeekPricesModule } from "./week-prices/week-prices.module";
+import { CustomersModule } from "./customers/customers.module";
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { WeekPricesModule } from "./week-prices/week-prices.module";
         SmsModule,
     CurrencyModule,
     WeekPricesModule,
+    CustomersModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: AuthGuard }],

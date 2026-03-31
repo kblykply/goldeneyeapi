@@ -84,6 +84,7 @@ model User {
   commissions   Commission[]
   refreshTokens RefreshToken[]
   contractNotes ContractNote[] @relation("ContractNoteAuthor")
+  customerNotes CustomerNote[] @relation("CustomerNoteAuthor")
 }
 
 model Customer {
@@ -95,6 +96,7 @@ model Customer {
 
   presentations Presentation[]
   contracts     Contract[]
+  notes         CustomerNote[]
 }
 
 model Presentation {
@@ -353,4 +355,19 @@ model ContractNote {
   body String
 
   @@index([contractId])
+}
+
+model CustomerNote {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  authorId String
+  author   User   @relation("CustomerNoteAuthor", fields: [authorId], references: [id])
+
+  body String
+
+  @@index([customerId])
 }
