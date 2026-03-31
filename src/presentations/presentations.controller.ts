@@ -213,7 +213,7 @@ export class PresentationsController {
       },
     });
 
-    if (!pres || pres.salespersonId !== me.id) {
+    if (!pres || (pres.salespersonId !== me.id && me.role !== "ADMIN")) {
       return { ok: false, message: "Sunum bulunamadı" };
     }
 
@@ -275,7 +275,7 @@ export class PresentationsController {
       },
     });
 
-    if (!existing || existing.salespersonId !== me.id) {
+    if (!existing || (existing.salespersonId !== me.id && me.role !== "ADMIN")) {
       return { ok: false, message: "Sunum bulunamadı" };
     }
 
@@ -358,7 +358,7 @@ export class PresentationsController {
       include: { salesperson: { select: { id: true, leaderId: true } } },
     });
 
-    if (!pres || pres.salespersonId !== me.id) {
+    if (!pres || (pres.salespersonId !== me.id && me.role !== "ADMIN")) {
       return { ok: false, message: "Sunum bulunamadı" };
     }
 

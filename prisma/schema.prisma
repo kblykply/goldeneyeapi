@@ -362,7 +362,7 @@ model CustomerNote {
   createdAt DateTime @default(now())
 
   customerId String
-  customer   Customer @relation(fields: [customerId], references: [id])
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   authorId String
   author   User   @relation("CustomerNoteAuthor", fields: [authorId], references: [id])

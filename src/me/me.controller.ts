@@ -1,4 +1,5 @@
 import { Controller, Get, Query, Req } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { Request } from "express";
 import { AuthedUser } from "../auth/auth.types";
@@ -89,8 +90,8 @@ export class MeController {
     const me = req.user;
 
     const validStatuses = new Set(["CREATED", "OTP_SENT", "OPENED", "ENDED"]);
-    const where: any = { salespersonId: me.id };
-    if (status && validStatuses.has(status)) where.status = status;
+    const where: Prisma.PresentationWhereInput = { salespersonId: me.id };
+    if (status && validStatuses.has(status)) where.status = status as Prisma.EnumPresentationStatusFilter;
 
     const items = await this.prisma.presentation.findMany({
       where,
