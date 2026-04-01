@@ -21,6 +21,7 @@ import { AuditModule } from "./audit/audit.module";
 import { CurrencyModule } from "./currency/currency.module";
 import { WeekPricesModule } from "./week-prices/week-prices.module";
 import { CustomersModule } from "./customers/customers.module";
+import { NotificationsModule } from "./notifications/notifications.module";
 
 @Module({
   imports: [
@@ -36,10 +37,11 @@ import { CustomersModule } from "./customers/customers.module";
     UsersModule,
     ContractsModule,
     CommissionsModule,
-        SmsModule,
+    SmsModule,
     CurrencyModule,
     WeekPricesModule,
     CustomersModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: AuthGuard }],

@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query, Req } from "@nestjs/c
 import { PrismaService } from "../prisma/prisma.service";
 import { OtpService } from "../otp/otp.service";
 import { CurrencyService } from "../currency/currency.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
@@ -76,7 +77,18 @@ export class PresentationsController {
     private otp: OtpService,
     private currency: CurrencyService,
     private audit: AuditService,
+    private notifs: NotificationsService,
   ) {}
+
+  private notifyPresentation(
+    type: "PRESENTATION_STARTED" | "PRESENTATION_ENDED",
+    title: string,
+    body: string,
+    actorId: string,
+    presentationId: string,
+  ) {
+    this.notifs.create({ type, title, body, actorId, entityId: presentationId, entityType: "PRESENTATION" }).catch(() => {});
+  }
 
   @Post("start")
   async start(
@@ -121,6 +133,8 @@ export class PresentationsController {
       presentationId: pres.id,
       meta: { customerId: customer.id },
     });
+
+    this.notifyPresentation('PRESENTATION_STARTED', 'Sunum Başlatıldı', `${me.fullName} yeni bir sunum başlattı`, me.id, pres.id);
 
     return {
       ok: true,
@@ -168,6 +182,8 @@ export class PresentationsController {
       presentationId: pres.id,
       meta: { skipOtp: true, customerId: customer.id },
     });
+
+    this.notifyPresentation('PRESENTATION_STARTED', 'Sunum Başlatıldı', `${me.fullName} yeni bir sunum başlattı`, me.id, pres.id);
 
     return {
       ok: true,
@@ -459,6 +475,8 @@ export class PresentationsController {
       presentationId: pres.id,
       meta: { durationSec: updated.durationSec },
     });
+
+    this.notifyPresentation('PRESENTATION_ENDED', 'Sunum Tamamlandı', `${me.fullName} sunumunu tamamladı`, me.id, pres.id);
 
     return { ok: true, status: updated.status, durationSec: updated.durationSec };
   }

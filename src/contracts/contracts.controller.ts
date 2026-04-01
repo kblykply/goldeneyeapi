@@ -10,6 +10,7 @@ import * as crypto from "crypto";
 import { CommissionService } from "../commissions/commission.service";
 import { TeamService } from "../team/team.service";
 import { SmsService } from "../sms/sms.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { ConfigService } from "@nestjs/config";
 import { createClient } from "@supabase/supabase-js";
 
@@ -87,6 +88,7 @@ export class ContractsController {
     private commissions: CommissionService,
     private team: TeamService,
     private sms: SmsService,
+    private notifs: NotificationsService,
     private config: ConfigService,
     private audit: AuditService,
   ) {
@@ -255,6 +257,15 @@ export class ContractsController {
       entityId: id,
       contractId: id,
     });
+
+    this.notifs.create({
+      type: 'CONTRACT_PENDING_APPROVAL',
+      title: 'Onay Bekliyor',
+      body: `${me.fullName} sözleşmesi yetkili onayı bekliyor`,
+      actorId: me.id,
+      entityId: id,
+      entityType: 'CONTRACT',
+    }).catch(() => {});
 
     return { ok: true };
   }
