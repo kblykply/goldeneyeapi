@@ -5,6 +5,7 @@ import { CommissionService } from "./commission.service";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import { TeamService } from "../team/team.service";
+import { AuditService } from "../audit/audit.service";
 
 const ALLOWED_STATUS = new Set(["PENDING", "PAYABLE", "PAID"]);
 
@@ -19,7 +20,12 @@ class UpdateConfigDto {
 
 @Controller("commissions")
 export class CommissionsController {
-  constructor(private prisma: PrismaService, private team: TeamService, private commissionService: CommissionService) {}
+  constructor(
+    private prisma: PrismaService,
+    private team: TeamService,
+    private commissionService: CommissionService,
+    private audit: AuditService,
+  ) {}
 
   /**
    * GET /commissions/config (ADMIN only)
@@ -52,6 +58,14 @@ export class CommissionsController {
       create: { id: "singleton", ...data },
       update: data,
     });
+
+    await this.audit.log({
+      action: 'COMMISSION_CONFIG_UPDATED',
+      entityType: 'COMMISSION_CONFIG',
+      entityId: 'singleton',
+      meta: data,
+    });
+
     return { ok: true, config };
   }
 
@@ -192,6 +206,12 @@ export class CommissionsController {
       data: { status: "PAID" },
     });
 
+    await this.audit.log({
+      action: 'COMMISSION_MARKED_PAID',
+      entityType: 'COMMISSION',
+      entityId: id,
+    });
+
     return { ok: true };
   }
 
@@ -209,6 +229,12 @@ export class CommissionsController {
     await this.prisma.commission.update({
       where: { id },
       data: { status: "PAYABLE" },
+    });
+
+    await this.audit.log({
+      action: 'COMMISSION_MARKED_PAYABLE',
+      entityType: 'COMMISSION',
+      entityId: id,
     });
 
     return { ok: true };

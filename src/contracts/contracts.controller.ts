@@ -3,6 +3,7 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
+import { AuditService } from "../audit/audit.service";
 import { IsString, IsArray, IsOptional, IsDateString, IsInt, Min, ValidateNested, IsEmail } from "class-validator";
 import { Type } from "class-transformer";
 import * as crypto from "crypto";
@@ -87,6 +88,7 @@ export class ContractsController {
     private team: TeamService,
     private sms: SmsService,
     private config: ConfigService,
+    private audit: AuditService,
   ) {
     this.supabase = createClient(
       this.config.get<string>("SUPABASE_URL") ?? "",
@@ -163,6 +165,15 @@ export class ContractsController {
         });
       }
 
+      await this.audit.logWithTx(tx, {
+        action: 'CONTRACT_CREATED',
+        entityType: 'CONTRACT',
+        entityId: contract.id,
+        contractId: contract.id,
+        presentationId: pres.id,
+        meta: { paymentPlan: pres.paymentPlan, basePriceCents: pres.basePriceCents },
+      });
+
       return contract;
     });
 
@@ -199,6 +210,13 @@ export class ContractsController {
       },
     });
 
+    await this.audit.log({
+      action: 'CONTRACT_OTP_SENT',
+      entityType: 'CONTRACT',
+      entityId: id,
+      contractId: id,
+    });
+
     return { ok: true, devOtp: otp };
   }
 
@@ -229,6 +247,13 @@ export class ContractsController {
         status: "CUSTOMER_CONFIRMED",
         customerConfirmedAt: new Date(),
       },
+    });
+
+    await this.audit.log({
+      action: 'CONTRACT_OTP_VERIFIED',
+      entityType: 'CONTRACT',
+      entityId: id,
+      contractId: id,
     });
 
     return { ok: true };
@@ -290,6 +315,14 @@ export class ContractsController {
     // ✅ Create commissions (idempotent)
     await this.commissions.calculateForApprovedContract(id);
 
+    await this.audit.log({
+      action: 'CONTRACT_APPROVED',
+      entityType: 'CONTRACT',
+      entityId: id,
+      contractId: id,
+      meta: { approvedById: me.id },
+    });
+
     return { ok: true };
   }
 
@@ -323,6 +356,14 @@ export class ContractsController {
         approvedById: me.id,
         rejectedReason: reason,
       },
+    });
+
+    await this.audit.log({
+      action: 'CONTRACT_REJECTED',
+      entityType: 'CONTRACT',
+      entityId: id,
+      contractId: id,
+      meta: { reason },
     });
 
     return { ok: true };
@@ -413,6 +454,14 @@ export class ContractsController {
         body: true,
         author: { select: { id: true, fullName: true, role: true } },
       },
+    });
+
+    await this.audit.log({
+      action: 'CONTRACT_NOTE_ADDED',
+      entityType: 'CONTRACT',
+      entityId: id,
+      contractId: id,
+      meta: { noteId: note.id },
     });
 
     return { ok: true, note };

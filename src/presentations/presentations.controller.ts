@@ -5,6 +5,7 @@ import { CurrencyService } from "../currency/currency.service";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
+import { AuditService } from "../audit/audit.service";
 
 const SUPPORTED_CURRENCIES = ["GBP", "EUR", "USD", "TRY"] as const;
 type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
@@ -74,6 +75,7 @@ export class PresentationsController {
     private prisma: PrismaService,
     private otp: OtpService,
     private currency: CurrencyService,
+    private audit: AuditService,
   ) {}
 
   @Post("start")
@@ -112,6 +114,14 @@ export class PresentationsController {
       return { ok: false, message: "OTP gönderilemedi." };
     }
 
+    await this.audit.log({
+      action: 'PRESENTATION_STARTED',
+      entityType: 'PRESENTATION',
+      entityId: pres.id,
+      presentationId: pres.id,
+      meta: { customerId: customer.id },
+    });
+
     return {
       ok: true,
       presentationId: pres.id,
@@ -149,6 +159,14 @@ export class PresentationsController {
         userAgent: String(req.headers["user-agent"] || ""),
       },
       select: { id: true, status: true },
+    });
+
+    await this.audit.log({
+      action: 'PRESENTATION_STARTED',
+      entityType: 'PRESENTATION',
+      entityId: pres.id,
+      presentationId: pres.id,
+      meta: { skipOtp: true, customerId: customer.id },
     });
 
     return {
@@ -193,6 +211,13 @@ export class PresentationsController {
         step: 1,
       },
       select: { id: true, status: true, openedAt: true },
+    });
+
+    await this.audit.log({
+      action: 'PRESENTATION_OPENED',
+      entityType: 'PRESENTATION',
+      entityId: pres.id,
+      presentationId: pres.id,
     });
 
     return { ok: true, status: updated.status, openedAt: updated.openedAt };
@@ -326,6 +351,14 @@ export class PresentationsController {
         ? await this.currency.convertFromBaseCents(updated.basePriceCents, targetCurrency)
         : null;
 
+    await this.audit.log({
+      action: 'PRESENTATION_UPDATED',
+      entityType: 'PRESENTATION',
+      entityId: id,
+      presentationId: id,
+      meta: { fields: Object.keys(body).filter((k) => (body as any)[k] !== undefined) },
+    });
+
     return {
       ok: true,
       presentation: {
@@ -417,6 +450,14 @@ export class PresentationsController {
       where: { id: pres.id },
       data: { status: "ENDED", endedAt, durationSec },
       select: { id: true, status: true, durationSec: true },
+    });
+
+    await this.audit.log({
+      action: 'PRESENTATION_ENDED',
+      entityType: 'PRESENTATION',
+      entityId: pres.id,
+      presentationId: pres.id,
+      meta: { durationSec: updated.durationSec },
     });
 
     return { ok: true, status: updated.status, durationSec: updated.durationSec };

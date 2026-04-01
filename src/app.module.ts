@@ -16,6 +16,7 @@ import { ContractsModule } from "./contracts/contracts.module";
 
 import { CommissionsModule } from "./commissions/commissions.module";
 import { SmsModule } from "./sms/sms.module";
+import { AuditModule } from "./audit/audit.module";
 
 import { CurrencyModule } from "./currency/currency.module";
 import { WeekPricesModule } from "./week-prices/week-prices.module";
@@ -25,6 +26,7 @@ import { CustomersModule } from "./customers/customers.module";
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
+    AuditModule,
     AuthModule,
     MeModule,
     AuthorityModule,

@@ -13,6 +13,7 @@ import * as bcrypt from 'bcrypt';
 import { AuthedUser } from './auth.types';
 import { SkipAuth } from './skip-auth.decorator';
 import { DEFAULT_PASSWORD } from './auth.constants';
+import { AuditService } from '../audit/audit.service';
 
 class LoginDto {
   @IsString()
@@ -48,6 +49,7 @@ export class AuthController {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private config: ConfigService,
+    private audit: AuditService,
   ) {}
 
   private async issueTokens(userId: string) {
@@ -111,6 +113,12 @@ export class AuthController {
 
     const tokens = await this.issueTokens(user.id);
 
+    await this.audit.log({
+      action: 'PASSWORD_INITIALIZED',
+      entityType: 'USER',
+      entityId: user.id,
+    });
+
     return {
       ok: true,
       ...tokens,
@@ -153,6 +161,13 @@ export class AuthController {
     if (!passwordMatch) throw new UnauthorizedException('Invalid credentials');
 
     const tokens = await this.issueTokens(user.id);
+
+    await this.audit.log({
+      action: 'LOGIN',
+      entityType: 'USER',
+      entityId: user.id,
+      meta: { role: user.role },
+    });
 
     return {
       ...tokens,
@@ -197,6 +212,13 @@ export class AuthController {
     });
 
     const tokens = await this.issueTokens(stored.userId);
+
+    await this.audit.log({
+      action: 'TOKEN_REFRESHED',
+      entityType: 'USER',
+      entityId: stored.userId,
+    });
+
     return tokens;
   }
 
@@ -219,6 +241,12 @@ export class AuthController {
         // Token geçersizse sessizce geç
       }
     }
+
+    await this.audit.log({
+      action: 'LOGOUT',
+      entityType: 'USER',
+      entityId: req.user.id,
+    });
 
     return { ok: true };
   }

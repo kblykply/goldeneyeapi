@@ -16,6 +16,7 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { TeamService } from "../team/team.service";
 import { AuthedUser } from "../auth/auth.types";
+import { AuditService } from "../audit/audit.service";
 
 class CreateNoteDto {
   @IsString()
@@ -37,6 +38,7 @@ export class CustomersController {
   constructor(
     private prisma: PrismaService,
     private team: TeamService,
+    private audit: AuditService,
   ) {}
 
   private async assertAccess(customerId: string, me: AuthedUser): Promise<void> {
@@ -178,6 +180,13 @@ export class CustomersController {
       select: { id: true, fullName: true, phoneE164: true },
     });
 
+    await this.audit.log({
+      action: 'CUSTOMER_UPDATED',
+      entityType: 'CUSTOMER',
+      entityId: id,
+      meta: { fields: Object.keys(data) },
+    });
+
     return { ok: true, customer };
   }
 
@@ -194,6 +203,12 @@ export class CustomersController {
 
     await this.prisma.customerNote.deleteMany({ where: { customerId: id } });
     await this.prisma.customer.delete({ where: { id } });
+
+    await this.audit.log({
+      action: 'CUSTOMER_DELETED',
+      entityType: 'CUSTOMER',
+      entityId: id,
+    });
 
     return { ok: true };
   }
@@ -218,6 +233,13 @@ export class CustomersController {
         body: true,
         author: { select: { id: true, fullName: true, role: true } },
       },
+    });
+
+    await this.audit.log({
+      action: 'CUSTOMER_NOTE_ADDED',
+      entityType: 'CUSTOMER',
+      entityId: id,
+      meta: { noteId: note.id },
     });
 
     return { ok: true, note };
@@ -246,6 +268,13 @@ export class CustomersController {
     }
 
     await this.prisma.customerNote.delete({ where: { id: noteId } });
+
+    await this.audit.log({
+      action: 'CUSTOMER_NOTE_DELETED',
+      entityType: 'CUSTOMER',
+      entityId: id,
+      meta: { noteId },
+    });
 
     return { ok: true };
   }

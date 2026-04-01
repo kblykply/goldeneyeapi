@@ -5,6 +5,7 @@ import { RolesGuard } from "../auth/roles.guard";
 import { Request } from "express";
 import { AuthedUser } from "../auth/auth.types";
 import { CommissionService } from "../commissions/commission.service";
+import { AuditService } from "../audit/audit.service";
 
 class RejectDto {
   reason!: string;
@@ -14,7 +15,11 @@ class RejectDto {
 @UseGuards(RolesGuard)
 @Roles("ADMIN")
 export class AuthorityController {
-  constructor(private prisma: PrismaService, private commissions: CommissionService) {}
+  constructor(
+    private prisma: PrismaService,
+    private commissions: CommissionService,
+    private audit: AuditService,
+  ) {}
 
   @Get("contracts")
   async list(@Query("status") status?: string) {
@@ -56,6 +61,14 @@ export class AuthorityController {
     // ✅ Create commissions (idempotent in service)
     await this.commissions.calculateForApprovedContract(id);
 
+    await this.audit.log({
+      action: 'CONTRACT_APPROVED',
+      entityType: 'CONTRACT',
+      entityId: id,
+      contractId: id,
+      meta: { approvedById: req.user.id },
+    });
+
     return { ok: true };
   }
 
@@ -85,6 +98,14 @@ export class AuthorityController {
         approvedById: req.user.id,
         rejectedReason: reason,
       },
+    });
+
+    await this.audit.log({
+      action: 'CONTRACT_REJECTED',
+      entityType: 'CONTRACT',
+      entityId: id,
+      contractId: id,
+      meta: { reason },
     });
 
     return { ok: true };

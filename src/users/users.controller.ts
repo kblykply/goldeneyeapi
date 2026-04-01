@@ -30,6 +30,7 @@ import { Role } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import * as fs from "fs";
 import { DEFAULT_PASSWORD } from "../auth/auth.constants";
+import { AuditService } from "../audit/audit.service";
 
 function ensureDir(path: string) {
   if (!fs.existsSync(path)) fs.mkdirSync(path, { recursive: true });
@@ -108,6 +109,7 @@ export class UsersController {
     private prisma: PrismaService,
     private teamService: TeamService,
     private smsService: SmsService,
+    private audit: AuditService,
   ) {}
 
   @Post("me/avatar")
@@ -148,6 +150,12 @@ export class UsersController {
       where: { id: req.user.id },
       data: { avatarUrl: urlPath },
       select: { id: true, fullName: true, avatarUrl: true },
+    });
+
+    await this.audit.log({
+      action: 'USER_AVATAR_UPDATED',
+      entityType: 'USER',
+      entityId: user.id,
     });
 
     return { ok: true, user };
@@ -282,6 +290,13 @@ export class UsersController {
 
     this.smsService.sendWelcomeWhatsApp(user.phoneE164, user.fullName).catch((err) => this.logger.warn(`Welcome WhatsApp failed: ${err?.message}`));
 
+    await this.audit.log({
+      action: 'USER_CREATED',
+      entityType: 'USER',
+      entityId: user.id,
+      meta: { role: user.role, level: user.level },
+    });
+
     return { ok: true, user };
   }
 
@@ -378,6 +393,12 @@ export class UsersController {
           avatarUrl: true,
         },
       });
+      await this.audit.log({
+        action: 'USER_UPDATED',
+        entityType: 'USER',
+        entityId: user.id,
+        meta: { fields: Object.keys(patch) },
+      });
       return { ok: true, user };
     } catch (e: any) {
       if (e.code === "P2025") return { ok: false, message: "Kullanıcı bulunamadı" };
@@ -411,6 +432,11 @@ export class UsersController {
       await this.prisma.user.update({
         where: { id },
         data: { isActive: false },
+      });
+      await this.audit.log({
+        action: 'USER_DEACTIVATED',
+        entityType: 'USER',
+        entityId: id,
       });
       return { ok: true };
     } catch (e: any) {
