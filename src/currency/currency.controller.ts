@@ -1,8 +1,6 @@
-import { Controller, Get, Post, Req } from "@nestjs/common";
-import { Request } from "express";
+import { Controller, Get, Post } from "@nestjs/common";
 import { CurrencyService } from "./currency.service";
 import { AuditService } from "../audit/audit.service";
-import { AuthedUser } from "../auth/auth.types";
 
 @Controller("currency")
 export class CurrencyController {
@@ -18,7 +16,7 @@ export class CurrencyController {
   }
 
   @Post("refresh")
-  async refresh(@Req() _req: Request & { user: AuthedUser }) {
+  async refresh() {
     const result = await this.currencyService.refreshRates();
 
     await this.audit.log({

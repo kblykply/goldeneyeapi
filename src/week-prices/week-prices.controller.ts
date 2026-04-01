@@ -1,12 +1,10 @@
-import { Body, Controller, Get, Param, Patch, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, UseGuards } from "@nestjs/common";
 import { IsArray, IsInt, IsOptional, IsString, Min, ValidateNested } from "class-validator";
 import { Type } from "class-transformer";
 import { WeekPricesService } from "./week-prices.service";
 import { RolesGuard } from "../auth/roles.guard";
 import { Roles } from "../auth/roles.decorator";
 import { AuditService } from "../audit/audit.service";
-import { Request } from "express";
-import { AuthedUser } from "../auth/auth.types";
 
 class UpdateWeekPriceDto {
   @IsOptional()
@@ -61,10 +59,7 @@ export class WeekPricesController {
 
   @Patch("bulk")
   @Roles("ADMIN")
-  async bulkUpdate(
-    @Body() body: BulkUpdateDto,
-    @Req() _req: Request & { user: AuthedUser },
-  ) {
+  async bulkUpdate(@Body() body: BulkUpdateDto) {
     const result = await this.weekPricesService.bulkUpdate(body.items);
 
     await this.audit.log({
@@ -79,11 +74,7 @@ export class WeekPricesController {
 
   @Patch(":id")
   @Roles("ADMIN")
-  async updateOne(
-    @Param("id") id: string,
-    @Body() body: UpdateWeekPriceDto,
-    @Req() _req: Request & { user: AuthedUser },
-  ) {
+  async updateOne(@Param("id") id: string, @Body() body: UpdateWeekPriceDto) {
     const updated = await this.weekPricesService.updateOne(id, body);
     if (!updated) return { ok: false, message: "Fiyat kaydı bulunamadı" };
 

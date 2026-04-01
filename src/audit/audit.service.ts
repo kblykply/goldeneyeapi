@@ -19,21 +19,8 @@ export class AuditService {
   ) {}
 
   async log(data: AuditLogInput): Promise<void> {
-    const ctx = this.ctxService.get();
     try {
-      await this.prisma.auditLog.create({
-        data: {
-          actorId: ctx?.actorId ?? null,
-          ipAddress: ctx?.ipAddress ?? null,
-          userAgent: ctx?.userAgent ?? null,
-          action: data.action,
-          entityType: data.entityType,
-          entityId: data.entityId,
-          presentationId: data.presentationId ?? null,
-          contractId: data.contractId ?? null,
-          meta: (data.meta as Prisma.InputJsonValue) ?? undefined,
-        },
-      });
+      await this.prisma.auditLog.create({ data: this.buildData(data) });
     } catch (err) {
       // Audit hatası business operasyonunu asla patlatmaz
       this.logger.error('Audit log write failed', err);
@@ -42,19 +29,21 @@ export class AuditService {
 
   async logWithTx(tx: TxClient, data: AuditLogInput): Promise<void> {
     // Transaction içinde — hata transaction'ı rollback eder (intentional)
+    await tx.auditLog.create({ data: this.buildData(data) });
+  }
+
+  private buildData(data: AuditLogInput): Prisma.AuditLogUncheckedCreateInput {
     const ctx = this.ctxService.get();
-    await (tx as any).auditLog.create({
-      data: {
-        actorId: ctx?.actorId ?? null,
-        ipAddress: ctx?.ipAddress ?? null,
-        userAgent: ctx?.userAgent ?? null,
-        action: data.action,
-        entityType: data.entityType,
-        entityId: data.entityId,
-        presentationId: data.presentationId ?? null,
-        contractId: data.contractId ?? null,
-        meta: (data.meta as Prisma.InputJsonValue) ?? undefined,
-      },
-    });
+    return {
+      actorId: ctx?.actorId ?? null,
+      ipAddress: ctx?.ipAddress ?? null,
+      userAgent: ctx?.userAgent ?? null,
+      action: data.action,
+      entityType: data.entityType,
+      entityId: data.entityId,
+      presentationId: data.presentationId ?? null,
+      contractId: data.contractId ?? null,
+      meta: (data.meta as Prisma.InputJsonValue) ?? undefined,
+    };
   }
 }
