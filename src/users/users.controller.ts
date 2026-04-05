@@ -25,7 +25,8 @@ import { AuthedUser } from "../auth/auth.types";
 import { Roles } from "../auth/roles.decorator";
 import { RolesGuard } from "../auth/roles.guard";
 import { Request } from "express";
-import { IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Matches, Min, Max } from "class-validator";
+import { IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Matches, Min, Max, ValidateNested } from "class-validator";
+import { Type } from "class-transformer";
 import { Role } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import * as fs from "fs";
@@ -37,6 +38,18 @@ function ensureDir(path: string) {
 }
 
 const AVATAR_DIR = "uploads/avatars";
+
+class ReassignItemDto {
+  @IsString() subordinateId!: string;
+  @IsString() newLeaderId!: string;
+}
+
+class ReassignAndDeleteDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ReassignItemDto)
+  assignments!: ReassignItemDto[];
+}
 
 class UpdateUserDto {
   @IsOptional()
@@ -418,14 +431,12 @@ export class UsersController {
       return { ok: false, message: "Kendinizi silemezsiniz" };
     }
 
-    const activeDownline = await this.prisma.user.count({
+    const activeDownline = await this.prisma.user.findMany({
       where: { leaderId: id, isActive: true },
+      select: { id: true, fullName: true, level: true },
     });
-    if (activeDownline > 0) {
-      return {
-        ok: false,
-        message: "Bu kullanıcının aktif ekip üyeleri var. Önce onları başka bir lidere atayın.",
-      };
+    if (activeDownline.length > 0) {
+      return { ok: false, requiresReassign: true, downline: activeDownline };
     }
 
     try {
@@ -443,5 +454,85 @@ export class UsersController {
       if (e.code === "P2025") return { ok: false, message: "Kullanıcı bulunamadı" };
       throw e;
     }
+  }
+
+  @Post(":id/reassign-and-delete")
+  @UseGuards(RolesGuard)
+  @Roles("ADMIN")
+  async reassignAndDelete(
+    @Param("id") id: string,
+    @Body() body: ReassignAndDeleteDto,
+    @Req() req: Request & { user: AuthedUser }
+  ) {
+    if (req.user.id === id) return { ok: false, message: "Kendinizi silemezsiniz" };
+
+    const actualDownline = await this.prisma.user.findMany({
+      where: { leaderId: id, isActive: true },
+      select: { id: true },
+    });
+    const downlineSet = new Set(actualDownline.map((u) => u.id));
+
+    if (body.assignments.length !== actualDownline.length) {
+      return { ok: false, message: "Tüm alt kullanıcılar atanmalı" };
+    }
+    for (const { subordinateId } of body.assignments) {
+      if (!downlineSet.has(subordinateId)) return { ok: false, message: "Geçersiz alt kullanıcı" };
+    }
+
+    const targetLeaderIds = [...new Set(body.assignments.map((a) => a.newLeaderId))];
+    if (targetLeaderIds.includes(id)) {
+      return { ok: false, message: "Silinen kullanıcı yeni lider olamaz" };
+    }
+
+    const targetLeaders = await this.prisma.user.findMany({
+      where: { id: { in: targetLeaderIds }, isActive: true },
+      select: { id: true, level: true, role: true },
+    });
+    if (targetLeaders.length !== targetLeaderIds.length) {
+      return { ok: false, message: "Bir veya daha fazla hedef lider bulunamadı" };
+    }
+
+    const lvl2LeaderIds = targetLeaders
+      .filter((l) => l.role === Role.USER && l.level === 2)
+      .map((l) => l.id);
+
+    if (lvl2LeaderIds.length > 0) {
+      const currentCounts = await this.prisma.user.groupBy({
+        by: ["leaderId"],
+        where: { leaderId: { in: lvl2LeaderIds }, isActive: true },
+        _count: { id: true },
+      });
+      const currentCountMap = new Map(currentCounts.map((r) => [r.leaderId as string, r._count.id]));
+
+      const addedMap = new Map<string, number>();
+      for (const { newLeaderId } of body.assignments) {
+        addedMap.set(newLeaderId, (addedMap.get(newLeaderId) ?? 0) + 1);
+      }
+
+      for (const lid of lvl2LeaderIds) {
+        const current = currentCountMap.get(lid) ?? 0;
+        const added = addedMap.get(lid) ?? 0;
+        if (current + added > 3) {
+          return { ok: false, message: "Seçilen lider kapasitesi dolu" };
+        }
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await Promise.all(
+        body.assignments.map(({ subordinateId, newLeaderId }) =>
+          tx.user.update({ where: { id: subordinateId }, data: { leaderId: newLeaderId } })
+        )
+      );
+      await tx.user.update({ where: { id }, data: { isActive: false } });
+      await this.audit.logWithTx(tx, {
+        action: "USER_REASSIGN_AND_DELETE",
+        entityType: "USER",
+        entityId: id,
+        meta: { assignments: body.assignments },
+      });
+    });
+
+    return { ok: true };
   }
 }
