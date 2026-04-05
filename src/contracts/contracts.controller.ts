@@ -286,7 +286,22 @@ export class ContractsController {
       where: { status: "CUSTOMER_CONFIRMED" },
       orderBy: { createdAt: "desc" },
       include: {
-        customer: { select: { fullName: true, phoneE164: true } },
+        customer: {
+          select: {
+            fullName: true,
+            phoneE164: true,
+            presentations: {
+              orderBy: { createdAt: "desc" },
+              select: {
+                id: true,
+                createdAt: true,
+                endedAt: true,
+                status: true,
+                salesperson: { select: { fullName: true } },
+              },
+            },
+          },
+        },
         salesperson: { select: { id: true, fullName: true, phoneE164: true, level: true } },
       },
     });

@@ -239,6 +239,29 @@ export class PresentationsController {
     return { ok: true, status: updated.status, openedAt: updated.openedAt };
   }
 
+  @Get("check-customer")
+  async checkCustomer(@Query("phone") phone: string) {
+    if (!phone) {
+      return { hasRecentPresentation: false, lastPresentationDate: null };
+    }
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const customer = await this.prisma.customer.findUnique({
+      where: { phoneE164: phone },
+      select: {
+        presentations: {
+          where: { createdAt: { gte: thirtyDaysAgo } },
+          take: 1,
+          select: { id: true },
+        },
+      },
+    });
+
+    return { hasRecentPresentation: (customer?.presentations.length ?? 0) > 0 };
+  }
+
   @Get(":id")
   async getOne(
     @Param("id") id: string,
