@@ -23,7 +23,7 @@ export class NotificationsService {
 
   private async subtreeFilter(userId: string, role: string) {
     if (role === "ADMIN") return {};
-    if (role === "AUTHORITY") return { type: "CONTRACT_PENDING_APPROVAL" };
+    if (role === "AUTHORITY") return { type: NotificationType.CONTRACT_PENDING_APPROVAL };
     const ids = Array.from(await this.team.getSubtreeIds(userId));
     return { actorId: { in: ids } };
   }
