@@ -29,16 +29,16 @@ export class NotificationsService {
     return { actorId: { in: ids } };
   }
 
-  async findForUser(userId: string, role: string) {
+  private async userNotifWhere(userId: string, role: string) {
     const broadcast = await this.broadcastFilter(userId, role);
+    return { OR: [{ recipientId: userId }, { recipientId: null, ...broadcast }] };
+  }
+
+  async findForUser(userId: string, role: string) {
+    const where = await this.userNotifWhere(userId, role);
 
     const items = await this.prisma.notification.findMany({
-      where: {
-        OR: [
-          { recipientId: userId },
-          { recipientId: null, ...broadcast },
-        ],
-      },
+      where,
       include: {
         actor: {
           select: { id: true, fullName: true, avatarUrl: true, role: true },
@@ -71,16 +71,12 @@ export class NotificationsService {
   }
 
   async markAllAsRead(userId: string, role: string) {
-    const broadcast = await this.broadcastFilter(userId, role);
+    const where = await this.userNotifWhere(userId, role);
 
     const notifs = await this.prisma.notification.findMany({
-      where: {
-        OR: [
-          { recipientId: userId },
-          { recipientId: null, ...broadcast },
-        ],
-      },
+      where,
       select: { id: true },
+      take: 200,
     });
 
     if (notifs.length === 0) return;

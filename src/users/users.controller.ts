@@ -579,17 +579,18 @@ export class UsersController {
   ) {
     if (req.user.id === id) return { ok: false, message: "Kendiniz için bu işlem yapılamaz" };
 
-    const user = await this.prisma.user.findUnique({
-      where: { id },
-      select: { id: true, level: true, isActive: true },
-    });
+    // user ve newLeader bağımsız — paralel çek
+    const [user, newLeader] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id },
+        select: { id: true, level: true, isActive: true },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: body.newLeaderId },
+        select: { id: true, fullName: true, role: true, level: true, isActive: true },
+      }),
+    ]);
     if (!user || !user.isActive) return { ok: false, message: "Kullanıcı bulunamadı" };
-
-    // Yeni lideri doğrula
-    const newLeader = await this.prisma.user.findUnique({
-      where: { id: body.newLeaderId },
-      select: { id: true, fullName: true, role: true, level: true, isActive: true },
-    });
     if (!newLeader || !newLeader.isActive) return { ok: false, message: "Hedef lider bulunamadı" };
 
     const validLeader =
@@ -598,19 +599,16 @@ export class UsersController {
         : newLeader.role === Role.USER && newLeader.level === body.newLevel + 1;
     if (!validLeader) return { ok: false, message: "Geçersiz lider seçimi" };
 
-    // Yeni lider slot kapasitesi kontrolü (lvl3 için sınırsız)
-    if (body.newLevel !== 3) {
-      const slotCount = await this.prisma.user.count({
-        where: { leaderId: body.newLeaderId, isActive: true, id: { not: id } },
-      });
-      if (slotCount >= 3) return { ok: false, message: "Seçilen liderin kapasitesi dolu" };
-    }
+    // Slot kontrolü ve alt kullanıcılar bağımsız — paralel çek
+    const [slotCount, subordinates] = await Promise.all([
+      body.newLevel !== 3
+        ? this.prisma.user.count({ where: { leaderId: body.newLeaderId, isActive: true, id: { not: id } } })
+        : Promise.resolve(0),
+      this.prisma.user.findMany({ where: { leaderId: id, isActive: true }, select: { id: true, level: true } }),
+    ]);
+    if (body.newLevel !== 3 && slotCount >= 3) return { ok: false, message: "Seçilen liderin kapasitesi dolu" };
 
-    // Direkt alt kullanıcılar
-    const subordinates = await this.prisma.user.findMany({
-      where: { leaderId: id, isActive: true },
-      select: { id: true, level: true },
-    });
+    const userLevelChangedBody = `Seviyeniz ${user.level} → ${body.newLevel} olarak güncellendi. Yeni lideriniz: ${newLeader.fullName}.`;
 
     // Alt kullanıcı yoksa — basit güncelleme
     if (subordinates.length === 0) {
@@ -619,7 +617,7 @@ export class UsersController {
       this.notifs.create({
         type: NotificationType.USER_LEVEL_CHANGED,
         title: "Seviyeniz Güncellendi",
-        body: `Seviyeniz ${user.level} → ${body.newLevel} olarak güncellendi. Yeni lideriniz: ${newLeader!.fullName}.`,
+        body: userLevelChangedBody,
         actorId: req.user.id,
         recipientId: id,
         entityId: id,
@@ -648,7 +646,7 @@ export class UsersController {
       this.notifs.create({
         type: NotificationType.USER_LEVEL_CHANGED,
         title: "Seviyeniz Güncellendi",
-        body: `Seviyeniz ${user.level} → ${body.newLevel} olarak güncellendi. Yeni lideriniz: ${newLeader!.fullName}.`,
+        body: userLevelChangedBody,
         actorId: req.user.id, recipientId: id, entityId: id, entityType: "USER",
       }).catch(() => {});
       // Alt kullanıcılara bildirim
