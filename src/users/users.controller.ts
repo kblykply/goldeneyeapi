@@ -27,11 +27,12 @@ import { RolesGuard } from "../auth/roles.guard";
 import { Request } from "express";
 import { IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Matches, Min, Max, ValidateNested } from "class-validator";
 import { Type } from "class-transformer";
-import { Role } from "@prisma/client";
+import { Role, NotificationType } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import * as fs from "fs";
 import { DEFAULT_PASSWORD } from "../auth/auth.constants";
 import { AuditService } from "../audit/audit.service";
+import { NotificationsService } from "../notifications/notifications.service";
 
 function ensureDir(path: string) {
   if (!fs.existsSync(path)) fs.mkdirSync(path, { recursive: true });
@@ -49,6 +50,22 @@ class ReassignAndDeleteDto {
   @ValidateNested({ each: true })
   @Type(() => ReassignItemDto)
   assignments!: ReassignItemDto[];
+}
+
+class ChangeLevelSubDto {
+  @IsString() subordinateId!: string;
+  @IsString() newLeaderId!: string;
+}
+
+class ChangeLevelDto {
+  @IsInt() @Min(1) @Max(3) newLevel!: number;
+  @IsString() newLeaderId!: string;
+  @IsEnum(["carry", "reassign"] as const) subordinateHandling!: "carry" | "reassign";
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ChangeLevelSubDto)
+  assignments?: ChangeLevelSubDto[];
 }
 
 class UpdateUserDto {
@@ -123,6 +140,7 @@ export class UsersController {
     private teamService: TeamService,
     private smsService: SmsService,
     private audit: AuditService,
+    private notifs: NotificationsService,
   ) {}
 
   @Post("me/avatar")
@@ -377,7 +395,8 @@ export class UsersController {
   @Roles("ADMIN")
   async updateUser(
     @Param("id") id: string,
-    @Body() body: UpdateUserDto
+    @Body() body: UpdateUserDto,
+    @Req() req: Request & { user: AuthedUser }
   ) {
     const patch = Object.fromEntries(
       Object.entries({
@@ -412,6 +431,20 @@ export class UsersController {
         entityId: user.id,
         meta: { fields: Object.keys(patch) },
       });
+
+      // Lider veya seviye değişikliği bildirimi
+      if (body.leaderId !== undefined || body.level !== undefined) {
+        const leaderName = body.leaderId
+          ? await this.prisma.user.findUnique({ where: { id: body.leaderId }, select: { fullName: true } }).then((l) => l?.fullName)
+          : undefined;
+        const notifType = body.level !== undefined ? NotificationType.USER_LEVEL_CHANGED : NotificationType.USER_LEADER_CHANGED;
+        const title = body.level !== undefined ? "Seviyeniz Güncellendi" : "Lideriniz Değiştirildi";
+        const bodyText = body.level !== undefined
+          ? `Seviyeniz ${body.level} olarak güncellendi${leaderName ? `, yeni lideriniz: ${leaderName}` : ""}.`
+          : `Lideriniz değiştirildi${leaderName ? `: ${leaderName}` : ""}.`;
+        this.notifs.create({ type: notifType, title, body: bodyText, actorId: req.user.id, recipientId: id, entityId: id, entityType: "USER" }).catch(() => {});
+      }
+
       return { ok: true, user };
     } catch (e: any) {
       if (e.code === "P2025") return { ok: false, message: "Kullanıcı bulunamadı" };
@@ -532,6 +565,175 @@ export class UsersController {
         meta: { assignments: body.assignments },
       });
     });
+
+    return { ok: true };
+  }
+
+  @Post(":id/change-level")
+  @UseGuards(RolesGuard)
+  @Roles("ADMIN")
+  async changeLevel(
+    @Param("id") id: string,
+    @Body() body: ChangeLevelDto,
+    @Req() req: Request & { user: AuthedUser }
+  ) {
+    if (req.user.id === id) return { ok: false, message: "Kendiniz için bu işlem yapılamaz" };
+
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, level: true, isActive: true },
+    });
+    if (!user || !user.isActive) return { ok: false, message: "Kullanıcı bulunamadı" };
+
+    // Yeni lideri doğrula
+    const newLeader = await this.prisma.user.findUnique({
+      where: { id: body.newLeaderId },
+      select: { id: true, fullName: true, role: true, level: true, isActive: true },
+    });
+    if (!newLeader || !newLeader.isActive) return { ok: false, message: "Hedef lider bulunamadı" };
+
+    const validLeader =
+      body.newLevel === 3
+        ? ([Role.REGIONAL_MANAGER, Role.AGENCY, Role.REGIONAL_LEADER] as Role[]).includes(newLeader.role)
+        : newLeader.role === Role.USER && newLeader.level === body.newLevel + 1;
+    if (!validLeader) return { ok: false, message: "Geçersiz lider seçimi" };
+
+    // Yeni lider slot kapasitesi kontrolü (lvl3 için sınırsız)
+    if (body.newLevel !== 3) {
+      const slotCount = await this.prisma.user.count({
+        where: { leaderId: body.newLeaderId, isActive: true, id: { not: id } },
+      });
+      if (slotCount >= 3) return { ok: false, message: "Seçilen liderin kapasitesi dolu" };
+    }
+
+    // Direkt alt kullanıcılar
+    const subordinates = await this.prisma.user.findMany({
+      where: { leaderId: id, isActive: true },
+      select: { id: true, level: true },
+    });
+
+    // Alt kullanıcı yoksa — basit güncelleme
+    if (subordinates.length === 0) {
+      await this.prisma.user.update({ where: { id }, data: { level: body.newLevel, leaderId: body.newLeaderId } });
+      await this.audit.log({ action: "USER_LEVEL_CHANGED", entityType: "USER", entityId: id, meta: { oldLevel: user.level, newLevel: body.newLevel } });
+      this.notifs.create({
+        type: NotificationType.USER_LEVEL_CHANGED,
+        title: "Seviyeniz Güncellendi",
+        body: `Seviyeniz ${user.level} → ${body.newLevel} olarak güncellendi. Yeni lideriniz: ${newLeader!.fullName}.`,
+        actorId: req.user.id,
+        recipientId: id,
+        entityId: id,
+        entityType: "USER",
+      }).catch(() => {});
+      return { ok: true };
+    }
+
+    // Alt kullanıcı var — mod gerekli
+    if (body.subordinateHandling === "carry") {
+      if (body.newLevel < 2) return { ok: false, message: "Bu seviye için 'beraberinde taşı' geçerli değil" };
+      const subNewLevel = body.newLevel - 1;
+      await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({ where: { id }, data: { level: body.newLevel, leaderId: body.newLeaderId } });
+        await Promise.all(
+          subordinates.map((s) => tx.user.update({ where: { id: s.id }, data: { level: subNewLevel } }))
+        );
+        await this.audit.logWithTx(tx, {
+          action: "USER_LEVEL_CHANGED_CARRY",
+          entityType: "USER",
+          entityId: id,
+          meta: { oldLevel: user.level, newLevel: body.newLevel, subNewLevel, subordinateCount: subordinates.length },
+        });
+      });
+      // Kullanıcıya bildirim
+      this.notifs.create({
+        type: NotificationType.USER_LEVEL_CHANGED,
+        title: "Seviyeniz Güncellendi",
+        body: `Seviyeniz ${user.level} → ${body.newLevel} olarak güncellendi. Yeni lideriniz: ${newLeader!.fullName}.`,
+        actorId: req.user.id, recipientId: id, entityId: id, entityType: "USER",
+      }).catch(() => {});
+      // Alt kullanıcılara bildirim
+      Promise.all(subordinates.map((s) =>
+        this.notifs.create({
+          type: NotificationType.USER_LEVEL_CHANGED,
+          title: "Seviyeniz Güncellendi",
+          body: `Seviyeniz ${s.level} → ${subNewLevel} olarak güncellendi.`,
+          actorId: req.user.id, recipientId: s.id, entityId: s.id, entityType: "USER",
+        })
+      )).catch(() => {});
+      return { ok: true };
+    }
+
+    // subordinateHandling === "reassign"
+    const assignments = body.assignments ?? [];
+    const subordinateIds = new Set(subordinates.map((s) => s.id));
+
+    if (assignments.length !== subordinates.length) return { ok: false, message: "Tüm alt kullanıcılar atanmalı" };
+    for (const { subordinateId } of assignments) {
+      if (!subordinateIds.has(subordinateId)) return { ok: false, message: "Geçersiz alt kullanıcı" };
+    }
+
+    const targetLeaderIds = [...new Set(assignments.map((a) => a.newLeaderId))];
+    if (targetLeaderIds.includes(id)) return { ok: false, message: "Kullanıcı kendi alt kullanıcısının lideri olamaz" };
+
+    const targetLeaders = await this.prisma.user.findMany({
+      where: { id: { in: targetLeaderIds }, isActive: true },
+      select: { id: true, fullName: true, level: true, role: true },
+    });
+    if (targetLeaders.length !== targetLeaderIds.length) return { ok: false, message: "Bir veya daha fazla hedef lider bulunamadı" };
+
+    // Slot kapasitesi kontrolü (lvl2 liderler için)
+    const lvl2LeaderIds = targetLeaders.filter((l) => l.role === Role.USER && l.level === 2).map((l) => l.id);
+    if (lvl2LeaderIds.length > 0) {
+      const currentCounts = await this.prisma.user.groupBy({
+        by: ["leaderId"],
+        where: { leaderId: { in: lvl2LeaderIds }, isActive: true },
+        _count: { id: true },
+      });
+      const currentCountMap = new Map(currentCounts.map((r) => [r.leaderId as string, r._count.id]));
+      const addedMap = new Map<string, number>();
+      for (const { newLeaderId } of assignments) {
+        addedMap.set(newLeaderId, (addedMap.get(newLeaderId) ?? 0) + 1);
+      }
+      for (const lid of lvl2LeaderIds) {
+        const current = currentCountMap.get(lid) ?? 0;
+        const added = addedMap.get(lid) ?? 0;
+        if (current + added > 3) return { ok: false, message: "Seçilen lider kapasitesi dolu" };
+      }
+    }
+
+    const leaderNameMap = new Map(targetLeaders.map((l) => [l.id, l.fullName]));
+
+    await this.prisma.$transaction(async (tx) => {
+      await Promise.all(
+        assignments.map(({ subordinateId, newLeaderId }) =>
+          tx.user.update({ where: { id: subordinateId }, data: { leaderId: newLeaderId } })
+        )
+      );
+      await tx.user.update({ where: { id }, data: { level: body.newLevel, leaderId: body.newLeaderId } });
+      await this.audit.logWithTx(tx, {
+        action: "USER_LEVEL_CHANGED_REASSIGN",
+        entityType: "USER",
+        entityId: id,
+        meta: { oldLevel: user.level, newLevel: body.newLevel, assignments },
+      });
+    });
+
+    // Kullanıcıya bildirim
+    this.notifs.create({
+      type: NotificationType.USER_LEVEL_CHANGED,
+      title: "Seviyeniz Güncellendi",
+      body: `Seviyeniz ${user.level} → ${body.newLevel} olarak güncellendi. Yeni lideriniz: ${newLeader!.fullName}.`,
+      actorId: req.user.id, recipientId: id, entityId: id, entityType: "USER",
+    }).catch(() => {});
+    // Her alt kullanıcıya lider değişikliği bildirimi
+    Promise.all(assignments.map(({ subordinateId, newLeaderId }) =>
+      this.notifs.create({
+        type: NotificationType.USER_LEADER_CHANGED,
+        title: "Lideriniz Değiştirildi",
+        body: `Lideriniz değiştirildi. Yeni lideriniz: ${leaderNameMap.get(newLeaderId) ?? "bilinmiyor"}.`,
+        actorId: req.user.id, recipientId: subordinateId, entityId: subordinateId, entityType: "USER",
+      })
+    )).catch(() => {});
 
     return { ok: true };
   }

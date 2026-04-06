@@ -15,13 +15,14 @@ export class NotificationsService {
     title: string;
     body: string;
     actorId: string;
+    recipientId?: string;
     entityId?: string;
     entityType?: string;
   }) {
     return this.prisma.notification.create({ data });
   }
 
-  private async subtreeFilter(userId: string, role: string) {
+  private async broadcastFilter(userId: string, role: string) {
     if (role === "ADMIN") return {};
     if (role === "AUTHORITY") return { type: NotificationType.CONTRACT_PENDING_APPROVAL };
     const ids = Array.from(await this.team.getSubtreeIds(userId));
@@ -29,10 +30,15 @@ export class NotificationsService {
   }
 
   async findForUser(userId: string, role: string) {
-    const where = await this.subtreeFilter(userId, role);
+    const broadcast = await this.broadcastFilter(userId, role);
 
     const items = await this.prisma.notification.findMany({
-      where,
+      where: {
+        OR: [
+          { recipientId: userId },
+          { recipientId: null, ...broadcast },
+        ],
+      },
       include: {
         actor: {
           select: { id: true, fullName: true, avatarUrl: true, role: true },
@@ -65,10 +71,15 @@ export class NotificationsService {
   }
 
   async markAllAsRead(userId: string, role: string) {
-    const where = await this.subtreeFilter(userId, role);
+    const broadcast = await this.broadcastFilter(userId, role);
 
     const notifs = await this.prisma.notification.findMany({
-      where,
+      where: {
+        OR: [
+          { recipientId: userId },
+          { recipientId: null, ...broadcast },
+        ],
+      },
       select: { id: true },
     });
 
