@@ -16,8 +16,7 @@ import {
   UploadedFile,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { diskStorage } from "multer";
-import { extname } from "path";
+import { memoryStorage } from "multer";
 import { PrismaService } from "../prisma/prisma.service";
 import { TeamService } from "../team/team.service";
 import { SmsService } from "../sms/sms.service";
@@ -29,16 +28,12 @@ import { IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Matc
 import { Type } from "class-transformer";
 import { Role, NotificationType } from "@prisma/client";
 import * as bcrypt from "bcrypt";
-import * as fs from "fs";
 import { DEFAULT_PASSWORD } from "../auth/auth.constants";
 import { AuditService } from "../audit/audit.service";
 import { NotificationsService } from "../notifications/notifications.service";
-
-function ensureDir(path: string) {
-  if (!fs.existsSync(path)) fs.mkdirSync(path, { recursive: true });
-}
-
-const AVATAR_DIR = "uploads/avatars";
+import { ConfigService } from "@nestjs/config";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import * as sharp from "sharp";
 
 class ReassignItemDto {
   @IsString() subordinateId!: string;
@@ -134,6 +129,7 @@ class CreateUserDto {
 @Controller("users")
 export class UsersController {
   private readonly logger = new Logger(UsersController.name);
+  private supabase: SupabaseClient;
 
   constructor(
     private prisma: PrismaService,
@@ -141,24 +137,18 @@ export class UsersController {
     private smsService: SmsService,
     private audit: AuditService,
     private notifs: NotificationsService,
-  ) {}
+    private config: ConfigService,
+  ) {
+    this.supabase = createClient(
+      this.config.get<string>("SUPABASE_URL") ?? "",
+      this.config.get<string>("SUPABASE_SERVICE_KEY") ?? "",
+    );
+  }
 
   @Post("me/avatar")
   @UseInterceptors(
     FileInterceptor("file", {
-      storage: diskStorage({
-        destination: (_req, _file, cb) => {
-          ensureDir(AVATAR_DIR);
-          cb(null, AVATAR_DIR);
-        },
-        filename: (_req, file, cb) => {
-          const safeExt = extname(file.originalname).toLowerCase();
-          const name = `avatar_${Date.now()}_${Math.random()
-            .toString(16)
-            .slice(2)}${safeExt}`;
-          cb(null, name);
-        },
-      }),
+      storage: memoryStorage(),
       limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
       fileFilter: (_req, file, cb) => {
         const ok =
@@ -175,11 +165,28 @@ export class UsersController {
   ) {
     if (!file) throw new BadRequestException("Missing file");
 
-    const urlPath = `/uploads/avatars/${file.filename}`;
+    const processedBuffer = await sharp(file.buffer)
+      .resize(800, 800, { fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 80 })
+      .toBuffer();
+
+    const fileName = `${req.user.id}_${Date.now()}.webp`;
+
+    const { error: uploadError } = await this.supabase.storage
+      .from("avatars")
+      .upload(fileName, processedBuffer, {
+        contentType: "image/webp",
+        upsert: true,
+      });
+
+    if (uploadError) throw new BadRequestException(`Upload failed: ${uploadError.message}`);
+
+    const supabaseUrl = this.config.get<string>("SUPABASE_URL") ?? "";
+    const avatarUrl = `${supabaseUrl}/storage/v1/object/public/avatars/${fileName}`;
 
     const user = await this.prisma.user.update({
       where: { id: req.user.id },
-      data: { avatarUrl: urlPath },
+      data: { avatarUrl },
       select: { id: true, fullName: true, avatarUrl: true },
     });
 
