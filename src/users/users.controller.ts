@@ -33,7 +33,7 @@ import { AuditService } from "../audit/audit.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { ConfigService } from "@nestjs/config";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import * as sharp from "sharp";
+import sharp from "sharp";
 
 class ReassignItemDto {
   @IsString() subordinateId!: string;
