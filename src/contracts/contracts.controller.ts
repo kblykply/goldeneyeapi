@@ -613,7 +613,13 @@ export class ContractsController {
     const publicUrl = `${supabaseUrl}/storage/v1/object/public/contracts/${filePath}`;
 
     const periodText = weekPrice?.periodText ?? (c.weekOfYear ? `${c.weekOfYear}. Hafta` : "-");
-    const totalEur = c.basePriceCents ? (c.basePriceCents / 100).toLocaleString("tr-TR", { minimumFractionDigits: 0 }) : "-";
+    const installments = c.customPaymentPlan?.installments ?? [];
+    const effectiveBasePriceCents = installments.length > 0
+      ? installments.reduce((s, i) => s + i.baseAmountCents, 0)
+      : c.basePriceCents;
+    const totalEur = effectiveBasePriceCents
+      ? (effectiveBasePriceCents / 100).toLocaleString("tr-TR", { minimumFractionDigits: 0 })
+      : "-";
     const planLabel = (c.paymentPlan && PLAN_LABELS[c.paymentPlan]) ?? "-";
 
     await this.sms.sendWhatsApp(c.customer.phoneE164, {

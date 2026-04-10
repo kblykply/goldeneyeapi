@@ -139,6 +139,11 @@ export class MeController {
         customer: { select: { fullName: true, phoneE164: true } },
         salesperson: { select: { id: true, fullName: true, phoneE164: true, level: true } },
         approvedBy: { select: { id: true, fullName: true, phoneE164: true, role: true } },
+        customPaymentPlan: {
+          select: {
+            installments: { select: { baseAmountCents: true } },
+          },
+        },
       },
     });
 
