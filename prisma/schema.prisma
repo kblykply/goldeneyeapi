@@ -422,3 +422,29 @@ model NotificationRead {
   @@unique([notificationId, userId])
   @@index([userId])
 }
+
+enum ApartmentStatus {
+  AVAILABLE
+  RESERVED
+  SOLD
+  RENTED
+  UNDER_DEVELOPMENT
+}
+
+model Apartment {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  status      ApartmentStatus @default(AVAILABLE)
+  address     String
+  sqft        Float
+  priceUsd    Float
+
+  images      String[]
+
+  title       String?
+  description String?
+  floor       Int?
+  roomCount   Int?
+}

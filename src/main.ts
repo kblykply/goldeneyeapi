@@ -5,9 +5,9 @@ import { ValidationPipe } from "@nestjs/common";
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Allow requests from Next.js dev server
+  // Allow requests from all origins (public listing endpoints need cross-origin access)
   app.enableCors({
-    origin: ["http://localhost:3000", "https://goldeneyefront-cjr3.vercel.app"],
+    origin: (origin, callback) => callback(null, true),
     credentials: true,
   });
 
