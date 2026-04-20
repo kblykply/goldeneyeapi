@@ -9,7 +9,6 @@ import {
   Patch,
   Post,
   Query,
-  Req,
   UploadedFile,
   UseInterceptors,
 } from "@nestjs/common";
@@ -18,12 +17,16 @@ import { ConfigService } from "@nestjs/config";
 import { memoryStorage } from "multer";
 import { createClient } from "@supabase/supabase-js";
 import { IsEnum, IsNumber, IsOptional, IsString, Min } from "class-validator";
-import { Transform, Type } from "class-transformer";
+import { Type } from "class-transformer";
 import { ApartmentStatus } from "@prisma/client";
 import sharp from "sharp";
 import { PrismaService } from "../prisma/prisma.service";
 import { SkipAuth } from "../auth/skip-auth.decorator";
 import { Roles } from "../auth/roles.decorator";
+
+// ---------------------------------------------------------------------------
+// DTOs
+// ---------------------------------------------------------------------------
 
 class CreateApartmentDto {
   @IsOptional()
@@ -116,52 +119,86 @@ class ListApartmentsQuery {
   offset?: number = 0;
 }
 
-class DeleteImageDto {
-  @IsString()
-  url: string;
-}
+// ---------------------------------------------------------------------------
+// Controller
+// ---------------------------------------------------------------------------
 
 @Controller("apartments")
 export class ApartmentsController {
   private supabase: ReturnType<typeof createClient>;
+  private readonly _supabaseUrl: string;
 
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
   ) {
+    this._supabaseUrl = this.config.get<string>("SUPABASE_URL") ?? "";
     this.supabase = createClient(
-      this.config.get<string>("SUPABASE_URL") ?? "",
+      this._supabaseUrl,
       this.config.get<string>("SUPABASE_SERVICE_KEY") ?? "",
     );
   }
 
+  private storagePathFromUrl(url: string): string {
+    const prefix = `${this._supabaseUrl}/storage/v1/object/public/apartments/`;
+    return url.startsWith(prefix) ? url.slice(prefix.length) : url;
+  }
+
+  private publicUrl(fileName: string): string {
+    return `${this._supabaseUrl}/storage/v1/object/public/apartments/${fileName}`;
+  }
+
+  private async findWithImages(id: string) {
+    return this.prisma.apartment.findUnique({
+      where: { id },
+      include: { images: { orderBy: { order: "asc" } } },
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public endpoints
+  // ---------------------------------------------------------------------------
+
+  /** List apartments — returns cover image only per apartment */
   @SkipAuth()
   @Get()
   async list(@Query() query: ListApartmentsQuery) {
     const { status, limit = 20, offset = 0 } = query;
+    const where = status ? { status } : undefined;
 
-    const [items, total] = await Promise.all([
+    const [raw, total] = await Promise.all([
       this.prisma.apartment.findMany({
-        where: status ? { status } : undefined,
+        where,
         orderBy: { createdAt: "desc" },
         take: Number(limit),
         skip: Number(offset),
+        include: {
+          images: { where: { isCover: true }, take: 1 },
+        },
       }),
-      this.prisma.apartment.count({
-        where: status ? { status } : undefined,
-      }),
+      this.prisma.apartment.count({ where }),
     ]);
+
+    const items = raw.map(({ images, ...apt }) => ({
+      ...apt,
+      coverImage: images[0] ?? null,
+    }));
 
     return { ok: true, data: { items, total } };
   }
 
+  /** Get single apartment — returns all images */
   @SkipAuth()
   @Get(":id")
   async findOne(@Param("id") id: string) {
-    const apartment = await this.prisma.apartment.findUnique({ where: { id } });
+    const apartment = await this.findWithImages(id);
     if (!apartment) throw new NotFoundException("Apartment not found");
     return { ok: true, data: apartment };
   }
+
+  // ---------------------------------------------------------------------------
+  // Admin endpoints — CRUD
+  // ---------------------------------------------------------------------------
 
   @Roles("ADMIN")
   @Post()
@@ -176,8 +213,8 @@ export class ApartmentsController {
         description: dto.description,
         floor: dto.floor,
         roomCount: dto.roomCount,
-        images: [],
       },
+      include: { images: { orderBy: { order: "asc" } } },
     });
     return { ok: true, data: apartment };
   }
@@ -200,6 +237,7 @@ export class ApartmentsController {
         ...(dto.floor !== undefined && { floor: dto.floor }),
         ...(dto.roomCount !== undefined && { roomCount: dto.roomCount }),
       },
+      include: { images: { orderBy: { order: "asc" } } },
     });
     return { ok: true, data: apartment };
   }
@@ -207,16 +245,13 @@ export class ApartmentsController {
   @Roles("ADMIN")
   @Delete(":id")
   async remove(@Param("id") id: string) {
-    const existing = await this.prisma.apartment.findUnique({ where: { id } });
+    const existing = await this.findWithImages(id);
     if (!existing) throw new NotFoundException("Apartment not found");
 
-    // Remove all images from Supabase storage
     if (existing.images.length > 0) {
-      const paths = existing.images.map((url) => {
-        const supabaseUrl = this.config.get<string>("SUPABASE_URL") ?? "";
-        const prefix = `${supabaseUrl}/storage/v1/object/public/apartments/`;
-        return url.startsWith(prefix) ? url.slice(prefix.length) : url;
-      });
+      const paths = existing.images.map((img) =>
+        this.storagePathFromUrl(img.url),
+      );
       await this.supabase.storage.from("apartments").remove(paths);
     }
 
@@ -224,6 +259,11 @@ export class ApartmentsController {
     return { ok: true };
   }
 
+  // ---------------------------------------------------------------------------
+  // Admin endpoints — image management
+  // ---------------------------------------------------------------------------
+
+  /** Upload a new image. Auto-sets as cover if it's the first one. */
   @Roles("ADMIN")
   @Post(":id/images")
   @UseInterceptors(
@@ -235,7 +275,10 @@ export class ApartmentsController {
         if (allowed.includes(file.mimetype)) {
           cb(null, true);
         } else {
-          cb(new BadRequestException("Only PNG, JPEG, WEBP images are allowed"), false);
+          cb(
+            new BadRequestException("Only PNG, JPEG, WEBP images are allowed"),
+            false,
+          );
         }
       },
     }),
@@ -243,7 +286,7 @@ export class ApartmentsController {
   async uploadImage(@Param("id") id: string, @UploadedFile() file: any) {
     if (!file) throw new BadRequestException("No file provided");
 
-    const existing = await this.prisma.apartment.findUnique({ where: { id } });
+    const existing = await this.findWithImages(id);
     if (!existing) throw new NotFoundException("Apartment not found");
 
     const processed = await sharp(file.buffer)
@@ -256,41 +299,90 @@ export class ApartmentsController {
       .from("apartments")
       .upload(fileName, processed, { contentType: "image/webp", upsert: false });
 
-    if (error) throw new BadRequestException(`Storage upload failed: ${error.message}`);
+    if (error)
+      throw new BadRequestException(`Storage upload failed: ${error.message}`);
 
-    const supabaseUrl = this.config.get<string>("SUPABASE_URL") ?? "";
-    const publicUrl = `${supabaseUrl}/storage/v1/object/public/apartments/${fileName}`;
+    const isFirstImage = existing.images.length === 0;
+    const nextOrder = isFirstImage
+      ? 0
+      : Math.max(...existing.images.map((i) => i.order)) + 1;
 
-    const apartment = await this.prisma.apartment.update({
-      where: { id },
-      data: { images: { push: publicUrl } },
+    await this.prisma.apartmentImage.create({
+      data: {
+        apartmentId: id,
+        url: this.publicUrl(fileName),
+        isCover: isFirstImage,
+        order: nextOrder,
+      },
     });
 
+    const apartment = await this.findWithImages(id);
     return { ok: true, data: apartment };
   }
 
+  /** Delete a specific image by its ID */
   @Roles("ADMIN")
-  @Delete(":id/images")
-  async deleteImage(@Param("id") id: string, @Body() dto: DeleteImageDto) {
-    const existing = await this.prisma.apartment.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException("Apartment not found");
+  @Delete(":id/images/:imageId")
+  async deleteImage(
+    @Param("id") id: string,
+    @Param("imageId") imageId: string,
+  ) {
+    const image = await this.prisma.apartmentImage.findUnique({
+      where: { id: imageId },
+    });
+    if (!image || image.apartmentId !== id)
+      throw new NotFoundException("Image not found");
 
-    if (!existing.images.includes(dto.url)) {
-      throw new BadRequestException("Image URL not found on this apartment");
+    const { error } = await this.supabase.storage
+      .from("apartments")
+      .remove([this.storagePathFromUrl(image.url)]);
+    if (error)
+      throw new BadRequestException(`Storage delete failed: ${error.message}`);
+
+    await this.prisma.apartmentImage.delete({ where: { id: imageId } });
+
+    if (image.isCover) {
+      const next = await this.prisma.apartmentImage.findFirst({
+        where: { apartmentId: id },
+        orderBy: { order: "asc" },
+      });
+      if (next) {
+        await this.prisma.apartmentImage.update({
+          where: { id: next.id },
+          data: { isCover: true },
+        });
+      }
     }
 
-    const supabaseUrl = this.config.get<string>("SUPABASE_URL") ?? "";
-    const prefix = `${supabaseUrl}/storage/v1/object/public/apartments/`;
-    const storagePath = dto.url.startsWith(prefix) ? dto.url.slice(prefix.length) : dto.url;
+    const apartment = await this.findWithImages(id);
+    return { ok: true, data: apartment };
+  }
 
-    const { error } = await this.supabase.storage.from("apartments").remove([storagePath]);
-    if (error) throw new BadRequestException(`Storage delete failed: ${error.message}`);
-
-    const apartment = await this.prisma.apartment.update({
-      where: { id },
-      data: { images: existing.images.filter((u) => u !== dto.url) },
+  /** Set a specific image as the cover */
+  @Roles("ADMIN")
+  @Patch(":id/images/:imageId/cover")
+  async setCover(
+    @Param("id") id: string,
+    @Param("imageId") imageId: string,
+  ) {
+    const image = await this.prisma.apartmentImage.findUnique({
+      where: { id: imageId },
     });
+    if (!image || image.apartmentId !== id)
+      throw new NotFoundException("Image not found");
 
+    await this.prisma.$transaction([
+      this.prisma.apartmentImage.updateMany({
+        where: { apartmentId: id },
+        data: { isCover: false },
+      }),
+      this.prisma.apartmentImage.update({
+        where: { id: imageId },
+        data: { isCover: true },
+      }),
+    ]);
+
+    const apartment = await this.findWithImages(id);
     return { ok: true, data: apartment };
   }
 }

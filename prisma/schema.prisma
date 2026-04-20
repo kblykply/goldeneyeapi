@@ -441,10 +441,25 @@ model Apartment {
   sqft        Float
   priceUsd    Float
 
-  images      String[]
-
   title       String?
   description String?
   floor       Int?
   roomCount   Int?
+
+  images      ApartmentImage[]
+}
+
+model ApartmentImage {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+
+  apartmentId String
+  apartment   Apartment @relation(fields: [apartmentId], references: [id], onDelete: Cascade)
+
+  url         String
+  isCover     Boolean   @default(false)
+  order       Int       @default(0)
+
+  @@index([apartmentId])
+  @@map("apartment_images")
 }
