@@ -463,3 +463,15 @@ model ApartmentImage {
   @@index([apartmentId])
   @@map("apartment_images")
 }
+
+model News {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  title    String
+  source   String
+  date     String
+  link     String
+  imageUrl String?
+}

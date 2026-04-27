@@ -23,6 +23,7 @@ import { WeekPricesModule } from "./week-prices/week-prices.module";
 import { CustomersModule } from "./customers/customers.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { ApartmentsModule } from "./apartments/apartments.module";
+import { NewsModule } from "./news/news.module";
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { ApartmentsModule } from "./apartments/apartments.module";
     CustomersModule,
     NotificationsModule,
     ApartmentsModule,
+    NewsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: AuthGuard }],
