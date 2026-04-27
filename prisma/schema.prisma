@@ -475,3 +475,16 @@ model News {
   link     String
   imageUrl String?
 }
+
+model BlogPost {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  title         String
+  excerpt       String
+  content       String   @db.Text
+  date          String
+  category      String
+  coverImageUrl String?
+}

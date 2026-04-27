@@ -24,6 +24,7 @@ import { CustomersModule } from "./customers/customers.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { ApartmentsModule } from "./apartments/apartments.module";
 import { NewsModule } from "./news/news.module";
+import { BlogModule } from "./blog/blog.module";
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { NewsModule } from "./news/news.module";
     NotificationsModule,
     ApartmentsModule,
     NewsModule,
+    BlogModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: AuthGuard }],
