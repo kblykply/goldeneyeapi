@@ -36,6 +36,16 @@ class CreateApartmentDto {
   @IsString()
   address: string;
 
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  latitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  longitude?: number;
+
   @IsNumber()
   @Type(() => Number)
   sqft: number;
@@ -71,6 +81,16 @@ class UpdateApartmentDto {
   @IsOptional()
   @IsString()
   address?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  latitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  longitude?: number;
 
   @IsOptional()
   @IsNumber()
@@ -207,6 +227,8 @@ export class ApartmentsController {
       data: {
         status: dto.status ?? "AVAILABLE",
         address: dto.address,
+        latitude: dto.latitude,
+        longitude: dto.longitude,
         sqft: dto.sqft,
         priceUsd: dto.priceUsd,
         title: dto.title,
@@ -230,6 +252,8 @@ export class ApartmentsController {
       data: {
         ...(dto.status !== undefined && { status: dto.status }),
         ...(dto.address !== undefined && { address: dto.address }),
+        ...(dto.latitude !== undefined && { latitude: dto.latitude }),
+        ...(dto.longitude !== undefined && { longitude: dto.longitude }),
         ...(dto.sqft !== undefined && { sqft: dto.sqft }),
         ...(dto.priceUsd !== undefined && { priceUsd: dto.priceUsd }),
         ...(dto.title !== undefined && { title: dto.title }),
