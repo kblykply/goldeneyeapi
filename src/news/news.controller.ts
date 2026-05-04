@@ -103,14 +103,14 @@ export class NewsController {
   // Admin endpoints — CRUD
   // ---------------------------------------------------------------------------
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Post()
   async create(@Body() dto: CreateNewsDto) {
     const news = await this.prisma.news.create({ data: dto });
     return { ok: true, data: news };
   }
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Patch(":id")
   async update(@Param("id") id: string, @Body() dto: UpdateNewsDto) {
     try {
@@ -130,7 +130,7 @@ export class NewsController {
     }
   }
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Delete(":id")
   async remove(@Param("id") id: string) {
     const existing = await this.prisma.news.findUnique({ where: { id } });
@@ -150,7 +150,7 @@ export class NewsController {
   // Admin endpoints — image
   // ---------------------------------------------------------------------------
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Post(":id/image")
   @UseInterceptors(
     FileInterceptor("file", {
@@ -201,7 +201,7 @@ export class NewsController {
     return { ok: true, data: news };
   }
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Delete(":id/image")
   async deleteImage(@Param("id") id: string) {
     const existing = await this.prisma.news.findUnique({ where: { id } });

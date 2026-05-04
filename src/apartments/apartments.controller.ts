@@ -220,7 +220,7 @@ export class ApartmentsController {
   // Admin endpoints — CRUD
   // ---------------------------------------------------------------------------
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Post()
   async create(@Body() dto: CreateApartmentDto) {
     const apartment = await this.prisma.apartment.create({
@@ -241,7 +241,7 @@ export class ApartmentsController {
     return { ok: true, data: apartment };
   }
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Patch(":id")
   async update(@Param("id") id: string, @Body() dto: UpdateApartmentDto) {
     const existing = await this.prisma.apartment.findUnique({ where: { id } });
@@ -266,7 +266,7 @@ export class ApartmentsController {
     return { ok: true, data: apartment };
   }
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Delete(":id")
   async remove(@Param("id") id: string) {
     const existing = await this.findWithImages(id);
@@ -288,7 +288,7 @@ export class ApartmentsController {
   // ---------------------------------------------------------------------------
 
   /** Upload a new image. Auto-sets as cover if it's the first one. */
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Post(":id/images")
   @UseInterceptors(
     FileInterceptor("file", {
@@ -345,7 +345,7 @@ export class ApartmentsController {
   }
 
   /** Delete a specific image by its ID */
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Delete(":id/images/:imageId")
   async deleteImage(
     @Param("id") id: string,
@@ -383,7 +383,7 @@ export class ApartmentsController {
   }
 
   /** Set a specific image as the cover */
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Patch(":id/images/:imageId/cover")
   async setCover(
     @Param("id") id: string,

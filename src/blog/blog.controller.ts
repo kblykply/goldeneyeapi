@@ -105,14 +105,14 @@ export class BlogController {
   // Admin endpoints — CRUD
   // ---------------------------------------------------------------------------
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Post()
   async create(@Body() dto: CreateBlogPostDto) {
     const post = await this.prisma.blogPost.create({ data: dto });
     return { ok: true, data: post };
   }
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Patch(":id")
   async update(@Param("id") id: string, @Body() dto: UpdateBlogPostDto) {
     try {
@@ -133,7 +133,7 @@ export class BlogController {
     }
   }
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Delete(":id")
   async remove(@Param("id") id: string) {
     const existing = await this.prisma.blogPost.findUnique({ where: { id } });
@@ -153,7 +153,7 @@ export class BlogController {
   // Admin endpoints — cover image
   // ---------------------------------------------------------------------------
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Post(":id/cover-image")
   @UseInterceptors(
     FileInterceptor("file", {
@@ -201,7 +201,7 @@ export class BlogController {
     return { ok: true, data: post };
   }
 
-  @Roles("ADMIN")
+  @Roles("ADMIN", "PANELUSER")
   @Delete(":id/cover-image")
   async deleteCoverImage(@Param("id") id: string) {
     const existing = await this.prisma.blogPost.findUnique({ where: { id } });

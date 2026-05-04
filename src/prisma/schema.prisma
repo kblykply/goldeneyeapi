@@ -11,6 +11,7 @@ enum Role {
   ADMIN
   AUTHORITY
   USER
+  PANELUSER
 }
 
 enum ContractStatus {
