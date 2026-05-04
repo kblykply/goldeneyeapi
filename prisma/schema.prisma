@@ -28,6 +28,7 @@ enum Role {
   SPECIAL
   AUTHORITY
   USER
+  PANELUSER
 }
 
 enum ContractStatus {
