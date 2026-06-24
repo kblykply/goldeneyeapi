@@ -8,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UploadedFile,
   UseInterceptors,
 } from "@nestjs/common";
@@ -15,7 +16,8 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { ConfigService } from "@nestjs/config";
 import { memoryStorage } from "multer";
 import { createClient } from "@supabase/supabase-js";
-import { IsOptional, IsString } from "class-validator";
+import { IsOptional, IsString, ValidateNested } from "class-validator";
+import { Type } from "class-transformer";
 import sharp from "sharp";
 import { PrismaService } from "../prisma/prisma.service";
 import { SkipAuth } from "../auth/skip-auth.decorator";
@@ -25,20 +27,23 @@ import { Roles } from "../auth/roles.decorator";
 // DTOs
 // ---------------------------------------------------------------------------
 
-class CreateBlogPostDto {
+class TranslationDto {
   @IsString() title: string;
   @IsString() excerpt: string;
   @IsString() content: string;
-  @IsString() date: string;
   @IsString() category: string;
 }
 
+class CreateBlogPostDto {
+  @IsString() date: string;
+  @ValidateNested() @Type(() => TranslationDto) tr: TranslationDto;
+  @ValidateNested() @Type(() => TranslationDto) en: TranslationDto;
+}
+
 class UpdateBlogPostDto {
-  @IsOptional() @IsString() title?: string;
-  @IsOptional() @IsString() excerpt?: string;
-  @IsOptional() @IsString() content?: string;
   @IsOptional() @IsString() date?: string;
-  @IsOptional() @IsString() category?: string;
+  @IsOptional() @ValidateNested() @Type(() => TranslationDto) tr?: TranslationDto;
+  @IsOptional() @ValidateNested() @Type(() => TranslationDto) en?: TranslationDto;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,35 +75,93 @@ export class BlogController {
     return `${this._supabaseUrl}/storage/v1/object/public/blog/${fileName}`;
   }
 
+  private normalizeLocale(locale: string): string {
+    return ["tr", "en"].includes(locale) ? locale : "tr";
+  }
+
+  private flattenPost(post: any, locale: string) {
+    const t =
+      post.translations?.find((t: any) => t.locale === locale) ??
+      post.translations?.[0] ??
+      {};
+    return {
+      id: post.id,
+      createdAt: post.createdAt,
+      updatedAt: post.updatedAt,
+      date: post.date,
+      coverImageUrl: post.coverImageUrl,
+      title: t.title ?? "",
+      excerpt: t.excerpt ?? "",
+      content: t.content ?? "",
+      category: t.category ?? "",
+    };
+  }
+
   // ---------------------------------------------------------------------------
   // Public endpoints
   // ---------------------------------------------------------------------------
 
   @SkipAuth()
   @Get()
-  async list() {
-    const items = await this.prisma.blogPost.findMany({
+  async list(@Query("locale") locale = "tr") {
+    const posts = await this.prisma.blogPost.findMany({
       select: {
         id: true,
         createdAt: true,
         updatedAt: true,
-        title: true,
-        excerpt: true,
         date: true,
-        category: true,
         coverImageUrl: true,
+        translations: {
+          select: { locale: true, title: true, excerpt: true, category: true },
+        },
       },
       orderBy: { createdAt: "desc" },
+    });
+    const validLocale = this.normalizeLocale(locale);
+    const items = posts.map((p) => {
+      const { content, ...rest } = this.flattenPost(p, validLocale);
+      return rest;
     });
     return { ok: true, data: { items, total: items.length } };
   }
 
+  @Roles("ADMIN", "PANELUSER")
+  @Get(":id/full")
+  async findOneFull(@Param("id") id: string) {
+    const post = await this.prisma.blogPost.findUnique({
+      where: { id },
+      include: { translations: true },
+    });
+    if (!post) throw new NotFoundException("Blog post not found");
+    const byLocale = Object.fromEntries(
+      post.translations.map(({ locale, title, excerpt, content, category }) => [
+        locale,
+        { title, excerpt, content, category },
+      ]),
+    );
+    return {
+      ok: true,
+      data: {
+        id: post.id,
+        createdAt: post.createdAt,
+        updatedAt: post.updatedAt,
+        date: post.date,
+        coverImageUrl: post.coverImageUrl,
+        tr: byLocale["tr"] ?? null,
+        en: byLocale["en"] ?? null,
+      },
+    };
+  }
+
   @SkipAuth()
   @Get(":id")
-  async findOne(@Param("id") id: string) {
-    const post = await this.prisma.blogPost.findUnique({ where: { id } });
+  async findOne(@Param("id") id: string, @Query("locale") locale = "tr") {
+    const post = await this.prisma.blogPost.findUnique({
+      where: { id },
+      include: { translations: true },
+    });
     if (!post) throw new NotFoundException("Blog post not found");
-    return { ok: true, data: post };
+    return { ok: true, data: this.flattenPost(post, this.normalizeLocale(locale)) };
   }
 
   // ---------------------------------------------------------------------------
@@ -108,7 +171,18 @@ export class BlogController {
   @Roles("ADMIN", "PANELUSER")
   @Post()
   async create(@Body() dto: CreateBlogPostDto) {
-    const post = await this.prisma.blogPost.create({ data: dto });
+    const post = await this.prisma.blogPost.create({
+      data: {
+        date: dto.date,
+        translations: {
+          create: [
+            { locale: "tr", ...dto.tr },
+            { locale: "en", ...dto.en },
+          ],
+        },
+      },
+      include: { translations: true },
+    });
     return { ok: true, data: post };
   }
 
@@ -116,15 +190,21 @@ export class BlogController {
   @Patch(":id")
   async update(@Param("id") id: string, @Body() dto: UpdateBlogPostDto) {
     try {
-      const post = await this.prisma.blogPost.update({
-        where: { id },
-        data: {
-          ...(dto.title !== undefined && { title: dto.title }),
-          ...(dto.excerpt !== undefined && { excerpt: dto.excerpt }),
-          ...(dto.content !== undefined && { content: dto.content }),
-          ...(dto.date !== undefined && { date: dto.date }),
-          ...(dto.category !== undefined && { category: dto.category }),
-        },
+      const post = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.blogPost.update({
+          where: { id },
+          data: { ...(dto.date !== undefined && { date: dto.date }) },
+        });
+        for (const loc of ["tr", "en"] as const) {
+          if (dto[loc]) {
+            await tx.blogPostTranslation.upsert({
+              where: { postId_locale: { postId: id, locale: loc } },
+              create: { postId: id, locale: loc, ...dto[loc] },
+              update: { ...dto[loc] },
+            });
+          }
+        }
+        return updated;
       });
       return { ok: true, data: post };
     } catch (e: any) {

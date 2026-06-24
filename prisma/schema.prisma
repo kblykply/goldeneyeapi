@@ -484,10 +484,22 @@ model BlogPost {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  title         String
-  excerpt       String
-  content       String   @db.Text
   date          String
-  category      String
   coverImageUrl String?
+
+  translations BlogPostTranslation[]
+}
+
+model BlogPostTranslation {
+  id       String @id @default(cuid())
+  locale   String
+  title    String
+  excerpt  String
+  content  String @db.Text
+  category String
+
+  postId String
+  post   BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, locale])
 }
