@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { SmsService } from "../sms/sms.service";
 
-type Purpose = "LOGIN" | "PRESENTATION_OPEN" | "CONTRACT_CONFIRM";
+type Purpose = "LOGIN" | "PRESENTATION_OPEN" | "CONTRACT_CONFIRM" | "CUSTOMER_PORTAL";
 
 @Injectable()
 export class OtpService {

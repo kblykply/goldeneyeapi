@@ -230,6 +230,7 @@ model Contract {
   commissions       Commission[]
   customPaymentPlan CustomPaymentPlan?
   notes             ContractNote[]
+  posTransactions   PosTransaction[]
 }
 
 model CustomPaymentPlan {
@@ -251,11 +252,14 @@ model CustomPaymentInstallment {
   plan        CustomPaymentPlan @relation(fields: [planId], references: [id])
   dueDate     DateTime
   baseAmountCents Int
+  paidAmountCents Int               @default(0)
   label       String?
   isPaid      Boolean           @default(false)
   paidAt      DateTime?
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
+
+  posAllocations PosAllocation[]
 
   @@index([planId])
   @@map("custom_payment_installments")
@@ -314,6 +318,13 @@ enum OtpPurpose {
   LOGIN
   PRESENTATION_OPEN
   CONTRACT_CONFIRM
+  CUSTOMER_PORTAL
+}
+
+enum PosTransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
 }
 
 model OtpCode {
@@ -384,6 +395,7 @@ enum NotificationType {
   CONTRACT_PENDING_APPROVAL
   USER_LEADER_CHANGED
   USER_LEVEL_CHANGED
+  PAYMENT_RECEIVED
 }
 
 model Notification {
@@ -502,4 +514,35 @@ model BlogPostTranslation {
   post   BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@unique([postId, locale])
+}
+
+model PosTransaction {
+  id             String               @id @default(cuid())
+  contractId     String
+  contract       Contract             @relation(fields: [contractId], references: [id])
+  amountCents    Int
+  posReference   String?              @unique
+  status         PosTransactionStatus @default(PENDING)
+  installmentIds String[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  allocations    PosAllocation[]
+
+  @@index([contractId])
+  @@map("pos_transactions")
+}
+
+model PosAllocation {
+  id               String                   @id @default(cuid())
+  posTransactionId String
+  posTransaction   PosTransaction           @relation(fields: [posTransactionId], references: [id])
+  installmentId    String
+  installment      CustomPaymentInstallment @relation(fields: [installmentId], references: [id])
+  amountCents      Int
+  createdAt        DateTime                 @default(now())
+
+  @@index([posTransactionId])
+  @@index([installmentId])
+  @@map("pos_allocations")
 }
