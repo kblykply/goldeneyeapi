@@ -40,6 +40,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
     "docxtemplater": "^3.68.3",
+    "fast-xml-parser": "^5.9.3",
     "multer": "^2.0.2",
     "pizzip": "^3.2.0",
     "reflect-metadata": "^0.2.2",

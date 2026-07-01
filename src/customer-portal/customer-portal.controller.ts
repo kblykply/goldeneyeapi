@@ -1,11 +1,32 @@
-import { Controller, Post, Body } from "@nestjs/common";
-import { IsString, IsArray, IsInt, Min, ArrayNotEmpty } from "class-validator";
+import { Controller, Post, Body, Query, Req, Res } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import {
+  IsString,
+  IsArray,
+  IsInt,
+  Min,
+  ArrayNotEmpty,
+  IsOptional,
+} from "class-validator";
+import { randomUUID } from "crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { OtpService } from "../otp/otp.service";
 import { AuditService } from "../audit/audit.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { TeamService } from "../team/team.service";
 import { SkipAuth } from "../auth/skip-auth.decorator";
+import { ZiraatMpiService } from "../payment/ziraat-mpi.service";
+import { ZiraatVposService } from "../payment/ziraat-vpos.service";
+import {
+  calculateMpiHash,
+  centsToDecimalString,
+  encryptCardToken,
+  decryptCardToken,
+  detectBrand,
+} from "../payment/payment.utils";
+
+// PARes Status (Y/A/N/U) → numeric mdStatus (doküman bölüm 5.8 hash parametreleri)
+const PARES_TO_MD_STATUS: Record<string, string> = { Y: "1", A: "4", U: "9", N: "0" };
 
 class RequestOtpDto {
   @IsString()
@@ -48,16 +69,70 @@ class PaymentCallbackDto {
   status: "SUCCESS" | "FAILED";
 }
 
+class Payment3dInitDto {
+  @IsString()
+  phoneE164: string;
+
+  @IsString()
+  contractId: string;
+
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsString({ each: true })
+  installmentIds: string[];
+
+  @IsInt()
+  @Min(1)
+  amountCents: number;
+
+  @IsString()
+  cardNumber: string;
+
+  @IsString()
+  cardExpiry: string; // YYMM — e.g. "2603"
+
+  @IsString()
+  cardCvv: string;
+
+  @IsString()
+  cardholderName: string;
+}
+
+// Ziraat MPI'ın SuccessUrl/FailureUrl'a POST ettiği alanlar (doküman bölüm 5.6)
+// Hem büyük hem küçük harf varyantları kabul edilir — banka sürümüne göre değişebilir
+class ThreeDCallbackDto {
+  @IsOptional() @IsString() Status?: string;   // PARes sonucu: Y/A/N/U
+  @IsOptional() @IsString() status?: string;
+  @IsOptional() @IsString() mdStatus?: string; // Sayısal durum — bazı sürümlerde gelebilir
+  @IsOptional() @IsString() Eci?: string;
+  @IsOptional() @IsString() eci?: string;
+  @IsOptional() @IsString() Cavv?: string;
+  @IsOptional() @IsString() cavv?: string;
+  @IsOptional() @IsString() paresStatus?: string;
+  @IsOptional() @IsString() ParesStatus?: string;
+  @IsOptional() @IsString() PARes?: string;
+  @IsOptional() @IsString() MD?: string;
+  @IsOptional() @IsString() Hash?: string;
+  @IsOptional() @IsString() VerifyEnrollmentRequestId?: string;
+}
+
 @SkipAuth()
 @Controller("customer-portal")
 export class CustomerPortalController {
+  private readonly cardSecret: string;
+
   constructor(
     private prisma: PrismaService,
     private otp: OtpService,
     private audit: AuditService,
     private notifs: NotificationsService,
     private team: TeamService,
-  ) {}
+    private mpi: ZiraatMpiService,
+    private vpos: ZiraatVposService,
+    private config: ConfigService,
+  ) {
+    this.cardSecret = this.config.getOrThrow("CARD_TOKEN_SECRET");
+  }
 
   @Post("request-otp")
   async requestOtp(@Body() body: RequestOtpDto) {
@@ -159,46 +234,13 @@ export class CustomerPortalController {
 
   @Post("initiate-payment")
   async initiatePayment(@Body() body: InitiatePaymentDto) {
-    const contract = await this.prisma.contract.findUnique({
-      where: { id: body.contractId },
-      select: {
-        status: true,
-        customerId: true,
-        customer: { select: { phoneE164: true } },
-        customPaymentPlan: {
-          select: {
-            installments: { select: { id: true, baseAmountCents: true, paidAmountCents: true } },
-          },
-        },
-      },
-    });
-
-    if (!contract) return { ok: false, message: "Sözleşme bulunamadı." };
-    if (contract.customer.phoneE164 !== body.phoneE164) {
-      return { ok: false, message: "Yetkisiz işlem." };
-    }
-    if (contract.status !== "APPROVED") {
-      return { ok: false, message: "Sözleşme ödenebilir durumda değil." };
-    }
-
-    const planInstallments = contract.customPaymentPlan?.installments ?? [];
-    const validIds = new Set(planInstallments.map((i) => i.id));
-    const allValid = body.installmentIds.every((id) => validIds.has(id));
-    if (!allValid) {
-      return { ok: false, message: "Geçersiz taksit seçimi." };
-    }
-
-    // Use the already-fetched installments to compute totalRemaining — no second DB query
-    const selectedInstallments = planInstallments.filter((i) =>
-      body.installmentIds.includes(i.id),
+    const validation = await this.validateContractForPayment(
+      body.contractId,
+      body.phoneE164,
+      body.installmentIds,
+      body.amountCents,
     );
-    const totalRemaining = selectedInstallments.reduce(
-      (sum, i) => sum + (i.baseAmountCents - i.paidAmountCents),
-      0,
-    );
-    if (body.amountCents > totalRemaining) {
-      return { ok: false, message: "Ödeme tutarı seçili taksitlerin toplamını aşıyor." };
-    }
+    if (!validation.ok) return validation;
 
     const transaction = await this.prisma.posTransaction.create({
       data: {
@@ -235,7 +277,6 @@ export class CustomerPortalController {
 
     if (!transaction) return { ok: false, message: "İşlem bulunamadı." };
 
-    // Duplicate callback — zaten işlendi
     if (transaction.status !== "PENDING") {
       return { ok: true };
     }
@@ -260,13 +301,286 @@ export class CustomerPortalController {
       return { ok: true };
     }
 
+    await this.allocateAndComplete(transaction.id, transaction.contractId, transaction.amountCents, transaction.installmentIds, body.posReference);
+    this.sendPaymentNotifications(transaction.id, transaction.contractId, transaction.amountCents).catch(() => {});
+
+    return { ok: true };
+  }
+
+  // ─── 3D Secure ───────────────────────────────────────────────────────────────
+
+  @Post("payment-3d-init")
+  async payment3dInit(@Body() body: Payment3dInitDto, @Req() req: any) {
+    const validation = await this.validateContractForPayment(
+      body.contractId,
+      body.phoneE164,
+      body.installmentIds,
+      body.amountCents,
+    );
+    if (!validation.ok) return validation;
+
+    const cardNumber = body.cardNumber.replace(/\s/g, "");
+    const mpiTransactionId = randomUUID().replace(/-/g, "");
+    const clientIp = this.getClientIp(req);
+
+    // Kart verisi geçici olarak şifrelenmiş token'da tutulur; işlem sonrası temizlenir
+    const cardToken = encryptCardToken(cardNumber, body.cardExpiry, this.cardSecret, body.cardCvv);
+
+    const transaction = await this.prisma.posTransaction.create({
+      data: {
+        contractId: body.contractId,
+        amountCents: body.amountCents,
+        installmentIds: body.installmentIds,
+        status: "PENDING",
+        mpiTransactionId,
+        cardBin: cardNumber.substring(0, 6),
+        cardLast4: cardNumber.slice(-4),
+        cardToken,
+      },
+      select: { id: true },
+    });
+
+    await this.audit.log({
+      action: "PAYMENT_3D_INITIATED",
+      entityType: "POS_TRANSACTION",
+      entityId: transaction.id,
+      contractId: body.contractId,
+      meta: {
+        amountCents: body.amountCents,
+        installmentIds: body.installmentIds,
+        cardBin: cardNumber.substring(0, 6),
+        cardLast4: cardNumber.slice(-4),
+      },
+    });
+
+    const enrollment = await this.mpi.checkEnrollment({
+      pan: cardNumber,
+      expiryYYMM: body.cardExpiry,
+      amountCents: body.amountCents,
+      mpiTransactionId,
+      cardholderName: body.cardholderName,
+    });
+
+    if (enrollment.status === "E" || enrollment.status === "U") {
+      await this.prisma.posTransaction.update({ where: { id: transaction.id }, data: { status: "FAILED" } });
+      return { ok: false, message: enrollment.errorMessage ?? "Kart doğrulama başlatılamadı." };
+    }
+
+    if (enrollment.status === "N") {
+      // Kart 3D'ye kayıtlı değil — Half-Secure VPos çağrısı (doküman bölüm 5.4.3)
+      const eci = detectBrand(cardNumber) === "VISA" ? "06" : "02";
+      const vposResult = await this.vpos.processPayment({
+        pan: cardNumber,
+        expiryYYMM: body.cardExpiry,
+        amountCents: body.amountCents,
+        cvv: body.cardCvv,
+        eci,
+        cavv: "",
+        mpiTransactionId,
+        clientIp,
+      });
+
+      if (vposResult.approved) {
+        await this.allocateAndComplete(transaction.id, body.contractId, body.amountCents, body.installmentIds, vposResult.hostReference ?? "");
+        this.sendPaymentNotifications(transaction.id, body.contractId, body.amountCents).catch(() => {});
+        return { ok: true, enrolled: false, approved: true, reference: vposResult.hostReference };
+      } else {
+        await this.prisma.posTransaction.update({
+          where: { id: transaction.id },
+          data: { status: "FAILED", eci, mdStatus: "0" },
+        });
+        return { ok: false, enrolled: false, approved: false, message: vposResult.responseText };
+      }
+    }
+
+    // Status === 'Y' — Kart 3D'ye kayıtlı, ACS'e yönlendir
+    // termUrl: MPI'ın kendi URL'i (doküman 5.5) — frontend bu URL'i ACS formuna koymalı
+    return {
+      ok: true,
+      enrolled: true,
+      transactionId: transaction.id,
+      acsUrl: enrollment.acsUrl,
+      pareq: enrollment.pareq,
+      md: enrollment.md,
+      termUrl: enrollment.termUrl,
+    };
+  }
+
+  // Ziraat MPI'ın SuccessUrl/FailureUrl'a yaptığı browser POST (doküman bölüm 5.6)
+  @Post("3d-callback")
+  async threeDCallback(
+    @Query("transactionId") transactionId: string,
+    @Body() body: ThreeDCallbackDto,
+    @Req() req: any,
+    @Res() res: any,
+  ) {
+    const frontendUrl = this.config.get("FRONTEND_URL", "");
+    const redirectFail = (code: string) => res.redirect(`${frontendUrl}/payment-tracking?status=failed&code=${encodeURIComponent(code)}`);
+    const redirectOk = (ref: string) => res.redirect(`${frontendUrl}/payment-tracking?status=success&ref=${encodeURIComponent(ref)}`);
+
+    if (!transactionId) return redirectFail("NO_TRANSACTION");
+
+    const transaction = await this.prisma.posTransaction.findFirst({
+      where: { mpiTransactionId: transactionId },
+      select: { id: true, amountCents: true, installmentIds: true, status: true, contractId: true, mpiTransactionId: true, cardToken: true },
+    });
+
+    if (!transaction) return redirectFail("NOT_FOUND");
+    if (transaction.status !== "PENDING") {
+      return transaction.status === "SUCCESS"
+        ? redirectOk(transaction.id)
+        : redirectFail("ALREADY_FAILED");
+    }
+
+    const paresStatus = body.Status ?? body.status ?? body.paresStatus ?? body.ParesStatus ?? "";
+    const eci = body.Eci ?? body.eci ?? "";
+    const cavv = body.Cavv ?? body.cavv ?? "";
+    const incomingHash = body.Hash ?? "";
+    const clientIp = this.getClientIp(req);
+    const mdStatus = body.mdStatus ?? PARES_TO_MD_STATUS[paresStatus] ?? "0";
+
+    if (incomingHash) {
+      const expectedHash = calculateMpiHash({
+        verifyEnrollmentRequestId: transaction.mpiTransactionId ?? transactionId,
+        merchantId: this.mpi.getMerchantId(),
+        currencyCode: this.mpi.getVposCurrencyCode(),
+        amount: centsToDecimalString(transaction.amountCents),
+        eci,
+        cavv,
+        mdStatus,
+        paresStatus,
+        mpiPassword: this.mpi.getMpiPassword(),
+      });
+      if (expectedHash !== incomingHash) {
+        await this.prisma.posTransaction.update({
+          where: { id: transaction.id },
+          data: { status: "FAILED", mdStatus, paresStatus, eci, cavv },
+        });
+        return redirectFail("HASH_MISMATCH");
+      }
+    }
+
+    // Doküman bölüm 5.7: Y ve A başarılı; N durdurulur; U bankaya göre değişir
+    if (paresStatus !== "Y" && paresStatus !== "A") {
+      await this.prisma.posTransaction.update({
+        where: { id: transaction.id },
+        data: { status: "FAILED", mdStatus, paresStatus, eci, cavv },
+      });
+      return redirectFail(`3D_FAILED_${paresStatus || mdStatus}`);
+    }
+
+    let pan = "";
+    let expiryYYMM = "";
+    let cvv: string | undefined;
+    if (transaction.cardToken) {
+      try {
+        const card = decryptCardToken(transaction.cardToken, this.cardSecret);
+        pan = card.pan;
+        expiryYYMM = card.expiry;
+        cvv = card.cvv;
+      } catch {
+        await this.prisma.posTransaction.update({ where: { id: transaction.id }, data: { status: "FAILED" } });
+        return redirectFail("CARD_TOKEN_ERROR");
+      }
+    }
+
+    // Doküman 5.7: Mastercard + Status A → CAVV gönderilmemelidir
+    const vposCavv = detectBrand(pan) === "MC" && paresStatus === "A" ? "" : cavv;
+
+    const vposResult = await this.vpos.processPayment({
+      pan,
+      expiryYYMM,
+      amountCents: transaction.amountCents,
+      cvv,
+      eci,
+      cavv: vposCavv,
+      mpiTransactionId: transaction.mpiTransactionId ?? transactionId,
+      clientIp,
+    });
+
+    if (vposResult.approved) {
+      await this.allocateAndComplete(
+        transaction.id,
+        transaction.contractId,
+        transaction.amountCents,
+        transaction.installmentIds,
+        vposResult.hostReference ?? "",
+        { mdStatus, paresStatus, eci, cavv, vposReference: vposResult.hostReference },
+      );
+      this.sendPaymentNotifications(transaction.id, transaction.contractId, transaction.amountCents).catch(() => {});
+      return redirectOk(vposResult.hostReference ?? transaction.id);
+    } else {
+      await this.prisma.posTransaction.update({
+        where: { id: transaction.id },
+        data: { status: "FAILED", mdStatus, paresStatus, eci, cavv },
+      });
+      return redirectFail(vposResult.responseCode);
+    }
+  }
+
+  // ─── Yardımcı metodlar ───────────────────────────────────────────────────────
+
+  private getClientIp(req: any): string {
+    return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket?.remoteAddress ?? "0.0.0.0";
+  }
+
+  private async validateContractForPayment(
+    contractId: string,
+    phoneE164: string,
+    installmentIds: string[],
+    amountCents: number,
+  ): Promise<
+    | { ok: false; message: string }
+    | { ok: true; selectedInstallments: Array<{ id: string; baseAmountCents: number; paidAmountCents: number }> }
+  > {
+    const contract = await this.prisma.contract.findUnique({
+      where: { id: contractId },
+      select: {
+        status: true,
+        customer: { select: { phoneE164: true } },
+        customPaymentPlan: {
+          select: {
+            installments: { select: { id: true, baseAmountCents: true, paidAmountCents: true } },
+          },
+        },
+      },
+    });
+
+    if (!contract) return { ok: false, message: "Sözleşme bulunamadı." };
+    if (contract.customer.phoneE164 !== phoneE164) return { ok: false, message: "Yetkisiz işlem." };
+    if (contract.status !== "APPROVED") return { ok: false, message: "Sözleşme ödenebilir durumda değil." };
+
+    const planInstallments = contract.customPaymentPlan?.installments ?? [];
+    const installmentMap = new Map(planInstallments.map((i) => [i.id, i]));
+    const selectedInstallments = installmentIds
+      .map((id) => installmentMap.get(id))
+      .filter(Boolean) as Array<{ id: string; baseAmountCents: number; paidAmountCents: number }>;
+
+    if (selectedInstallments.length !== installmentIds.length) {
+      return { ok: false, message: "Geçersiz taksit seçimi." };
+    }
+
+    const totalRemaining = selectedInstallments.reduce((s, i) => s + (i.baseAmountCents - i.paidAmountCents), 0);
+    if (amountCents > totalRemaining) return { ok: false, message: "Ödeme tutarı seçili taksitlerin toplamını aşıyor." };
+
+    return { ok: true, selectedInstallments };
+  }
+
+  private async allocateAndComplete(
+    transactionId: string,
+    contractId: string,
+    amountCents: number,
+    installmentIds: string[],
+    posReference: string,
+    extra?: { mdStatus?: string; paresStatus?: string; eci?: string; cavv?: string; vposReference?: string },
+  ): Promise<void> {
     const installments = await this.prisma.customPaymentInstallment.findMany({
-      where: { id: { in: transaction.installmentIds } },
+      where: { id: { in: installmentIds } },
       select: { id: true, baseAmountCents: true, paidAmountCents: true, dueDate: true },
       orderBy: { dueDate: "asc" },
     });
 
-    let remaining = transaction.amountCents;
+    let remaining = amountCents;
     const now = new Date();
     const allocationLog: { installmentId: string; amountCents: number; isPaid: boolean }[] = [];
 
@@ -274,29 +588,18 @@ export class CustomerPortalController {
       await this.prisma.$transaction(async (tx) => {
         for (const inst of installments) {
           if (remaining <= 0) break;
-
           const installmentRemaining = inst.baseAmountCents - inst.paidAmountCents;
           if (installmentRemaining <= 0) continue;
-
           const toPay = Math.min(installmentRemaining, remaining);
           const newPaid = inst.paidAmountCents + toPay;
           const isPaid = newPaid >= inst.baseAmountCents;
 
           await tx.posAllocation.create({
-            data: {
-              posTransactionId: transaction.id,
-              installmentId: inst.id,
-              amountCents: toPay,
-            },
+            data: { posTransactionId: transactionId, installmentId: inst.id, amountCents: toPay },
           });
-
           await tx.customPaymentInstallment.update({
             where: { id: inst.id },
-            data: {
-              paidAmountCents: newPaid,
-              isPaid,
-              paidAt: isPaid ? now : undefined,
-            },
+            data: { paidAmountCents: newPaid, isPaid, paidAt: isPaid ? now : undefined },
           });
 
           allocationLog.push({ installmentId: inst.id, amountCents: toPay, isPaid });
@@ -304,31 +607,34 @@ export class CustomerPortalController {
         }
 
         await tx.posTransaction.update({
-          where: { id: transaction.id },
-          data: { status: "SUCCESS", posReference: body.posReference },
+          where: { id: transactionId },
+          data: {
+            status: "SUCCESS",
+            posReference: posReference || undefined,
+            cardToken: null,
+            ...Object.fromEntries(
+              Object.entries(extra ?? {}).filter(([, v]) => v !== undefined),
+            ),
+          },
         });
 
         await this.audit.logWithTx(tx, {
           action: "PAYMENT_COMPLETED",
           entityType: "POS_TRANSACTION",
-          entityId: transaction.id,
-          contractId: transaction.contractId,
+          entityId: transactionId,
+          contractId,
           meta: {
-            posReference: body.posReference,
-            totalAmountCents: transaction.amountCents,
+            posReference,
+            totalAmountCents: amountCents,
             allocations: allocationLog,
+            ...(extra ?? {}),
           },
         });
       });
     } catch (e: any) {
-      if (e?.code === "P2002") return { ok: true };
+      if (e?.code === "P2002") return; // Duplike unique constraint — idempotent
       throw e;
     }
-
-    // Hiyerarşiye bildirim gönder (fire & forget — ödeme yanıtını bloklamaz)
-    this.sendPaymentNotifications(transaction.id, transaction.contractId, transaction.amountCents).catch(() => {});
-
-    return { ok: true };
   }
 
   private async sendPaymentNotifications(

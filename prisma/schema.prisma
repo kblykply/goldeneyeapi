@@ -527,9 +527,21 @@ model PosTransaction {
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
+  // Ziraat 3D Secure alanları
+  mpiTransactionId String?   // VerifyEnrollmentRequestId (bizim UUID'imiz)
+  eci              String?   // 05=full 3D, 06=half VISA, 02=half MC
+  cavv             String?   // CAVV from MPI
+  mdStatus         String?   // 1=Full 3D, 2/3/4=Half, 0/7/8/9=Enrolled değil
+  paresStatus      String?   // Y, A, N, U
+  cardBin          String?   // İlk 6 hane (gösterim için)
+  cardLast4        String?   // Son 4 hane (gösterim için)
+  vposReference    String?   // Banka referans no (HostReference)
+  cardToken        String?   // Geçici şifreli kart verisi (PAN+Expiry) — VPos sonrası silinir
+
   allocations    PosAllocation[]
 
   @@index([contractId])
+  @@index([mpiTransactionId])
   @@map("pos_transactions")
 }
 
