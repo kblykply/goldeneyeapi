@@ -1,8 +1,8 @@
 export interface EnrollmentParams {
   pan: string;
-  expiryYYMM: string; // YYMM format, e.g. "2603"
+  expiryYYMM: string;
   amountCents: number;
-  mpiTransactionId: string; // VerifyEnrollmentRequestId — our UUID
+  mpiTransactionId: string;
   cardholderName: string;
 }
 
@@ -11,20 +11,20 @@ export interface EnrollmentResult {
   acsUrl?: string;
   pareq?: string;
   md?: string;
-  termUrl?: string; // MPI's own TermUrl — must be used in ACS form, NOT our callback URL
+  termUrl?: string;
   errorCode?: string;
   errorMessage?: string;
 }
 
 export interface VposParams {
   pan: string;
-  expiryYYMM: string; // YYMM format
+  expiryYYMM: string;
   amountCents: number;
-  cvv?: string; // Temporarily stored in encrypted cardToken; cleared after VPos
-  eci: string;  // 05/06/07 for VISA; 02/01 for MC
-  cavv: string; // Empty string when not applicable (MC + Status A per doc section 5.7)
-  mpiTransactionId: string;
+  cvv?: string;
+  eci: string;
+  cavv: string;
   clientIp: string;
+  mpiTransactionId: string;
 }
 
 export interface VposResult {

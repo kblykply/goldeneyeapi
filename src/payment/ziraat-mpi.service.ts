@@ -16,8 +16,8 @@ export class ZiraatMpiService {
   private readonly merchantPassword: string;
   private readonly mpiPassword: string;
   private readonly mpiUrl: string;
-  private readonly mpiCurrencyCode: string; // Test=840 (USD); Prod=949 (TL)
-  private readonly vposCurrencyCode: string; // Always 949 for VPos
+  private readonly mpiCurrencyCode: string;
+  private readonly vposCurrencyCode: string;
   private readonly appBaseUrl: string;
 
   constructor(private config: ConfigService) {
@@ -25,7 +25,6 @@ export class ZiraatMpiService {
     this.merchantPassword = this.config.getOrThrow('ZIRAAT_MERCHANT_PASSWORD');
     this.mpiPassword = this.config.getOrThrow('ZIRAAT_MPI_PASSWORD');
     this.mpiUrl = this.config.getOrThrow('ZIRAAT_MPI_URL');
-    // Doküman: test ortamında MPI enrollment için Currency=840 (USD) gönderilmeli
     this.mpiCurrencyCode = this.config.get('ZIRAAT_MPI_CURRENCY_CODE', '840');
     this.vposCurrencyCode = this.config.get('ZIRAAT_CURRENCY_CODE', '949');
     this.appBaseUrl = this.config.getOrThrow('APP_BASE_URL');
@@ -72,7 +71,6 @@ export class ZiraatMpiService {
       return { status: 'E', errorMessage: 'MPI geçersiz yanıt.' };
     }
 
-    // Doküman yanıt yapısı: <IPaySecure><Message ID="..."><VERes>...</VERes></Message></IPaySecure>
     const veRes = (parsed?.IPaySecure?.Message?.VERes ?? parsed?.VERes) as Record<string, any> | undefined;
     if (!veRes) {
       this.logger.error('MPI enrollment: VERes missing in response', xmlText);
@@ -87,7 +85,6 @@ export class ZiraatMpiService {
         acsUrl: veRes.ACSUrl ?? veRes.acsUrl,
         pareq: veRes.PaReq ?? veRes.PAReq ?? veRes.pareq,
         md: veRes.MD ?? veRes.md,
-        // TermUrl in doküman: MPI'ın kendi URL'i — ACS formu bu URL'e POST eder
         termUrl: veRes.TermUrl ?? veRes.termUrl,
       };
     }

@@ -34,7 +34,6 @@ export function decryptCardToken(token: string, secret: string): { pan: string; 
 }
 
 export function calculateMpiHash(params: MpiHashParams): string {
-  // Sıra önemli — dokümantasyona göre sabit sıra
   const raw = [
     params.verifyEnrollmentRequestId,
     params.merchantId,
@@ -53,7 +52,6 @@ export function calculateMpiHash(params: MpiHashParams): string {
     .digest('base64');
 }
 
-// YYMM → YYYYMM (VPos için)
 export function formatExpiryForVpos(yymm: string): string {
   return `20${yymm.substring(0, 2)}${yymm.substring(2)}`;
 }
@@ -62,12 +60,10 @@ export function centsToDecimalString(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
-// MPI enrollment için marka kodu (100=VISA, 200=MC)
 export function detectBrandName(pan: string): '100' | '200' {
   return pan.trim().startsWith('4') ? '100' : '200';
 }
 
-// VPos/callback mantığı için marka
 export function detectBrand(pan: string): 'VISA' | 'MC' {
   return pan.trim().startsWith('4') ? 'VISA' : 'MC';
 }

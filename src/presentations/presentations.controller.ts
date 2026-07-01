@@ -60,7 +60,6 @@ class UpdatePresentationDto {
   paymentPlan?: "PESIN" | "ALTIN" | "TAKSIT_12";
 }
 
-// ✅ price column mapping
 function priceFromWeekPriceRow(
   row: { cashCents: number; installment6Cents: number; installment12Cents: number },
   plan: "PESIN" | "ALTIN" | "TAKSIT_12"
@@ -354,7 +353,6 @@ export class PresentationsController {
         ? (currencyParam as SupportedCurrency)
         : "EUR";
 
-    // ✅ price + periodText from DB
     let basePriceCents: number | null = null;
     let periodText: string | null = null;
 
@@ -417,10 +415,7 @@ export class PresentationsController {
     };
   }
 
-  /**
-   * GET /presentations/:id/doc-meta
-   * Docx oluşturmak için gereken ek meta verileri döner (periodText + regionalManager)
-   */
+  
   @Get(":id/doc-meta")
   async getDocMeta(@Param("id") id: string, @Req() req: Request & { user: AuthedUser }) {
     const me = req.user;

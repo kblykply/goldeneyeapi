@@ -37,12 +37,8 @@ export class ZiraatVposService {
       TransactionDeviceSource: '0',
     };
 
-    // CAVV: boş string yerine sadece dolu ise ekle (MC+StatusA durumunda gönderilmemeli)
     if (params.cavv) fields.CAVV = params.cavv;
-    // CVV: 3D sonrası opsiyonel, mevcut ise ekle
     if (params.cvv) fields.Cvv = params.cvv;
-
-    // Doküman bölüm 6: VPos POX yöntemi — prmtstr form parametresiyle gönderilir
     const xmlBody = buildXmlBody('VposRequest', fields);
 
     let xmlText: string;
@@ -78,7 +74,6 @@ export class ZiraatVposService {
     const responseCode = String(vposRes.ResultCode ?? vposRes.resultCode ?? '');
     const responseText = String(vposRes.ResultDetail ?? vposRes.resultDetail ?? '');
     const hostReference = String(vposRes.HostReference ?? vposRes.hostReference ?? '');
-    // Doküman bölüm 15: Başarılı işlem kodu "0000"
     const approved = responseCode === '0000';
 
     return { approved, responseCode, responseText, hostReference };
