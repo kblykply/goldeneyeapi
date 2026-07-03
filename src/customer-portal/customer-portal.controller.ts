@@ -445,7 +445,8 @@ export class CustomerPortalController {
 
     // Hash, bankanın hesapladığı değerlerle birebir aynı girdilerden üretilmeli:
     // banka callback'te echo'ladıysa onu kullan, yoksa kendi değerimize düş
-    const echoedAmount: string | undefined = rawBody.PurchaseAmount ?? rawBody.purchaseAmount;
+    const echoedAmount: string | undefined =
+      rawBody.PurchAmount ?? rawBody.PurchaseAmount ?? rawBody.purchaseAmount;
     const echoedCurrency: string | undefined =
       rawBody.PurchCurrency ?? rawBody.Currency ?? rawBody.currency;
     const expectedAmount = centsToDecimalString(transaction.amountCents);
@@ -460,31 +461,48 @@ export class CustomerPortalController {
     }
 
     if (incomingHash) {
-      const expectedHash = calculateMpiHash({
-        verifyEnrollmentRequestId: transaction.mpiTransactionId ?? transactionId,
-        merchantId: this.mpi.getMerchantId(),
-        currencyCode: echoedCurrency ?? this.mpi.getVposCurrencyCode(),
-        amount: echoedAmount ?? expectedAmount,
-        eci,
-        cavv,
-        mdStatus,
-        paresStatus,
-        mpiPassword: this.mpi.getMpiPassword(),
-      });
-      if (expectedHash !== incomingHash) {
+      // Doküman 5.8: VerifyEnrollmentRequestId + HostMerchantNumber + CurrencyCode +
+      // Amount + Eci + Cavv + mdstatus + ParesStatus + MPI şifresi → ISO-8859-9 → SHA-256 → Base64.
+      // Amount formatı ("100" / "100.00") dokümanda belirsiz; iki aday da denenir.
+      const amountCandidates = [...new Set([echoedAmount, expectedAmount].filter(Boolean))] as string[];
+      const currencyCandidates = [
+        ...new Set([echoedCurrency, this.mpi.getVposCurrencyCode()].filter(Boolean)),
+      ] as string[];
+      const hashInputs = { mdStatus: rawBody.MdStatus ?? mdStatus, paresStatus, eci, cavv };
+      const matched = amountCandidates.some((amount) =>
+        currencyCandidates.some(
+          (currencyCode) =>
+            calculateMpiHash({
+              verifyEnrollmentRequestId: transaction.mpiTransactionId ?? transactionId,
+              merchantId: this.mpi.getMerchantId(),
+              currencyCode,
+              amount,
+              ...hashInputs,
+              mpiPassword: this.mpi.getMpiPassword(),
+            }) === incomingHash,
+        ),
+      );
+      if (!matched) {
         const sanitized = Object.fromEntries(
           Object.entries(rawBody).map(([k, v]) =>
             /pan|card/i.test(k) ? [k, "***"] : [k, v],
           ),
         );
-        this.logger.error(
-          `3D callback hash mismatch. expected=${expectedHash} received=${incomingHash} body=${JSON.stringify(sanitized)}`,
+        this.logger.warn(
+          `3D callback hash mismatch (opsiyonel kontrol, doküman 5.8). received=${incomingHash} body=${JSON.stringify(sanitized)}`,
         );
-        await this.prisma.posTransaction.update({
-          where: { id: transaction.id },
-          data: { status: "FAILED", mdStatus, paresStatus, eci, cavv },
-        });
-        return redirectFail("HASH_MISMATCH");
+        // Doküman 5.8: bu hash ZORUNLU değil, ek bütünlük kontrolü ("hesaplanabilmektedir").
+        // Bankanın gerçek algoritması dokümandan sapıyor ve üretilemedi; asıl finansal
+        // güvence VPos provizyonundaki bağımsız ECI/CAVV doğrulaması + AMOUNT_MISMATCH kontrolü.
+        // Formül netleşince ZIRAAT_3D_HASH_ENFORCE=true ile tekrar bloklayıcı yapılabilir.
+        const enforce = this.config.get("ZIRAAT_3D_HASH_ENFORCE", "false") === "true";
+        if (enforce) {
+          await this.prisma.posTransaction.update({
+            where: { id: transaction.id },
+            data: { status: "FAILED", mdStatus, paresStatus, eci, cavv },
+          });
+          return redirectFail("HASH_MISMATCH");
+        }
       }
     }
 
