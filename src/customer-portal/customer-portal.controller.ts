@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Query, Req, Res } from "@nestjs/common";
+import { Controller, Post, Body, Query, Req, Res, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
   IsString,
@@ -119,6 +119,7 @@ class ThreeDCallbackDto {
 @SkipAuth()
 @Controller("customer-portal")
 export class CustomerPortalController {
+  private readonly logger = new Logger(CustomerPortalController.name);
   private readonly cardSecret: string;
 
   constructor(
@@ -432,6 +433,9 @@ export class CustomerPortalController {
         : redirectFail("ALREADY_FAILED");
     }
 
+    // ValidationPipe whitelist DTO dışı alanları siler; bankanın echo'ladığı
+    // PurchaseAmount/Currency gibi alanlar için ham gövdeye bakılır
+    const rawBody: Record<string, any> = req.body ?? {};
     const paresStatus = body.Status ?? body.status ?? body.paresStatus ?? body.ParesStatus ?? "";
     const eci = body.Eci ?? body.eci ?? "";
     const cavv = body.Cavv ?? body.cavv ?? "";
@@ -439,12 +443,28 @@ export class CustomerPortalController {
     const clientIp = this.getClientIp(req);
     const mdStatus = body.mdStatus ?? PARES_TO_MD_STATUS[paresStatus] ?? "0";
 
+    // Hash, bankanın hesapladığı değerlerle birebir aynı girdilerden üretilmeli:
+    // banka callback'te echo'ladıysa onu kullan, yoksa kendi değerimize düş
+    const echoedAmount: string | undefined = rawBody.PurchaseAmount ?? rawBody.purchaseAmount;
+    const echoedCurrency: string | undefined =
+      rawBody.PurchCurrency ?? rawBody.Currency ?? rawBody.currency;
+    const expectedAmount = centsToDecimalString(transaction.amountCents);
+
+    // Tutar bütünlüğü hash'ten bağımsız da doğrulanır
+    if (echoedAmount && Number(echoedAmount) !== Number(expectedAmount)) {
+      await this.prisma.posTransaction.update({
+        where: { id: transaction.id },
+        data: { status: "FAILED", mdStatus, paresStatus, eci, cavv },
+      });
+      return redirectFail("AMOUNT_MISMATCH");
+    }
+
     if (incomingHash) {
       const expectedHash = calculateMpiHash({
         verifyEnrollmentRequestId: transaction.mpiTransactionId ?? transactionId,
         merchantId: this.mpi.getMerchantId(),
-        currencyCode: this.mpi.getVposCurrencyCode(),
-        amount: centsToDecimalString(transaction.amountCents),
+        currencyCode: echoedCurrency ?? this.mpi.getVposCurrencyCode(),
+        amount: echoedAmount ?? expectedAmount,
         eci,
         cavv,
         mdStatus,
@@ -452,6 +472,14 @@ export class CustomerPortalController {
         mpiPassword: this.mpi.getMpiPassword(),
       });
       if (expectedHash !== incomingHash) {
+        const sanitized = Object.fromEntries(
+          Object.entries(rawBody).map(([k, v]) =>
+            /pan|card/i.test(k) ? [k, "***"] : [k, v],
+          ),
+        );
+        this.logger.error(
+          `3D callback hash mismatch. expected=${expectedHash} received=${incomingHash} body=${JSON.stringify(sanitized)}`,
+        );
         await this.prisma.posTransaction.update({
           where: { id: transaction.id },
           data: { status: "FAILED", mdStatus, paresStatus, eci, cavv },
