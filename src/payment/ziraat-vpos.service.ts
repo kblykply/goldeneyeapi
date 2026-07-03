@@ -46,7 +46,7 @@ export class ZiraatVposService {
       const res = await fetch(this.vposUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ prmtstr: xmlBody }).toString(),
+        body: new URLSearchParams({ prmstr: xmlBody }).toString(),
         signal: AbortSignal.timeout(15_000),
       });
       xmlText = await res.text();

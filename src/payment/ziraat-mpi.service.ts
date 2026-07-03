@@ -4,7 +4,6 @@ import type { EnrollmentParams, EnrollmentResult } from './payment.types';
 import {
   detectBrandName,
   centsToDecimalString,
-  buildXmlBody,
   parseXmlResponse,
 } from './payment.utils';
 
@@ -33,7 +32,7 @@ export class ZiraatMpiService {
   async checkEnrollment(params: EnrollmentParams): Promise<EnrollmentResult> {
     const callbackUrl = `${this.appBaseUrl}/customer-portal/3d-callback?transactionId=${params.mpiTransactionId}`;
 
-    const xmlBody = buildXmlBody('VEReq', {
+    const form = new URLSearchParams({
       MerchantId: this.merchantId,
       MerchantPassword: this.merchantPassword,
       VerifyEnrollmentRequestId: params.mpiTransactionId,
@@ -51,8 +50,12 @@ export class ZiraatMpiService {
     try {
       const res = await fetch(this.mpiUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'text/xml; charset=utf-8' },
-        body: xmlBody,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'text/xml, application/xml',
+          'User-Agent': 'Mozilla/5.0 (compatible; GoldeneyeAPI/1.0)',
+        },
+        body: form.toString(),
         signal: AbortSignal.timeout(10_000),
       });
       xmlText = await res.text();
