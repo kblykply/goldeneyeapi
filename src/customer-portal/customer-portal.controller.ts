@@ -20,6 +20,7 @@ import { ZiraatVposService } from "../payment/ziraat-vpos.service";
 import {
   calculateMpiHash,
   centsToDecimalString,
+  amountMatchesExpected,
   encryptCardToken,
   decryptCardToken,
   detectBrand,
@@ -451,8 +452,16 @@ export class CustomerPortalController {
       rawBody.PurchCurrency ?? rawBody.Currency ?? rawBody.currency;
     const expectedAmount = centsToDecimalString(transaction.amountCents);
 
-    // Tutar bütünlüğü hash'ten bağımsız da doğrulanır
-    if (echoedAmount && Number(echoedAmount) !== Number(expectedAmount)) {
+    // Tutar bütünlüğü hash'ten bağımsız da doğrulanır.
+    // Not: bazı ACS/MPI sürümleri tutarı TR locale ("1.234,56") ya da küçük birim tam
+    // sayı ("10000") formatında echo'layabilir; amountMatchesExpected bu varyantları dener.
+    if (echoedAmount && !amountMatchesExpected(echoedAmount, transaction.amountCents)) {
+      const sanitized = Object.fromEntries(
+        Object.entries(rawBody).map(([k, v]) => (/pan|card/i.test(k) ? [k, "***"] : [k, v])),
+      );
+      this.logger.warn(
+        `3D callback amount mismatch. echoed=${echoedAmount} expected=${expectedAmount} amountCents=${transaction.amountCents} transactionId=${transaction.id} body=${JSON.stringify(sanitized)}`,
+      );
       await this.prisma.posTransaction.update({
         where: { id: transaction.id },
         data: { status: "FAILED", mdStatus, paresStatus, eci, cavv },
