@@ -97,6 +97,10 @@ class Payment3dInitDto {
 
   @IsString()
   cardholderName: string;
+
+  @IsOptional()
+  @IsString()
+  locale?: string;
 }
 
 // Ziraat MPI'ın SuccessUrl/FailureUrl'a POST ettiği alanlar (doküman bölüm 5.6)
@@ -361,6 +365,7 @@ export class CustomerPortalController {
       amountCents: body.amountCents,
       mpiTransactionId,
       cardholderName: body.cardholderName,
+      locale: body.locale,
     });
 
     if (enrollment.status === "E" || enrollment.status === "U") {
@@ -412,13 +417,18 @@ export class CustomerPortalController {
   @Post("3d-callback")
   async threeDCallback(
     @Query("transactionId") transactionId: string,
+    @Query("locale") localeParam: string,
     @Body() body: ThreeDCallbackDto,
     @Req() req: any,
     @Res() res: any,
   ) {
     const frontendUrl = this.config.get("FRONTEND_URL", "");
-    const redirectFail = (code: string) => res.redirect(`${frontendUrl}/payment-tracking?status=failed&code=${encodeURIComponent(code)}`);
-    const redirectOk = (ref: string) => res.redirect(`${frontendUrl}/payment-tracking?status=success&ref=${encodeURIComponent(ref)}`);
+    // next-intl locale-prefix'li route kullanıyor; prefix olmadan /payment-tracking 404 verir.
+    // Banka SuccessUrl/FailureUrl'i aynen geri POST ettiği için locale query'den okunur.
+    const allowedLocales = ["tr", "en", "fa", "ru"];
+    const locale = allowedLocales.includes(localeParam) ? localeParam : "tr";
+    const redirectFail = (code: string) => res.redirect(`${frontendUrl}/${locale}/payment-tracking?status=failed&code=${encodeURIComponent(code)}`);
+    const redirectOk = (ref: string) => res.redirect(`${frontendUrl}/${locale}/payment-tracking?status=success&ref=${encodeURIComponent(ref)}`);
 
     if (!transactionId) return redirectFail("NO_TRANSACTION");
 
@@ -563,7 +573,8 @@ export class CustomerPortalController {
         { mdStatus, paresStatus, eci, cavv, vposReference: vposResult.hostReference },
       );
       this.sendPaymentNotifications(transaction.id, transaction.contractId, transaction.amountCents).catch(() => {});
-      return redirectOk(vposResult.hostReference ?? transaction.id);
+      // hostReference boş string dönebilir; ?? yerine || ile transaction.id'ye düş
+      return redirectOk(vposResult.hostReference || transaction.id);
     } else {
       await this.prisma.posTransaction.update({
         where: { id: transaction.id },

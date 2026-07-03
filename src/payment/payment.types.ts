@@ -4,6 +4,7 @@ export interface EnrollmentParams {
   amountCents: number;
   mpiTransactionId: string;
   cardholderName: string;
+  locale?: string;
 }
 
 export interface EnrollmentResult {

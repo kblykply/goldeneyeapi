@@ -30,7 +30,10 @@ export class ZiraatMpiService {
   }
 
   async checkEnrollment(params: EnrollmentParams): Promise<EnrollmentResult> {
-    const callbackUrl = `${this.appBaseUrl}/customer-portal/3d-callback?transactionId=${params.mpiTransactionId}`;
+    // locale, banka SuccessUrl/FailureUrl'i aynen geri POST ettiği için callback'te
+    // @Query ile geri okunur; dönüş yönlendirmesi doğru dil prefix'iyle yapılır
+    const localeParam = params.locale ? `&locale=${encodeURIComponent(params.locale)}` : "";
+    const callbackUrl = `${this.appBaseUrl}/customer-portal/3d-callback?transactionId=${params.mpiTransactionId}${localeParam}`;
 
     const form = new URLSearchParams({
       MerchantId: this.merchantId,
