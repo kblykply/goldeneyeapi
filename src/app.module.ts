@@ -20,6 +20,7 @@ import { AuditModule } from "./audit/audit.module";
 
 import { CurrencyModule } from "./currency/currency.module";
 import { WeekPricesModule } from "./week-prices/week-prices.module";
+import { PricingModule } from "./pricing/pricing.module";
 import { CustomersModule } from "./customers/customers.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { ApartmentsModule } from "./apartments/apartments.module";
@@ -44,6 +45,7 @@ import { CustomerPortalModule } from "./customer-portal/customer-portal.module";
     SmsModule,
     CurrencyModule,
     WeekPricesModule,
+    PricingModule,
     CustomersModule,
     NotificationsModule,
     ApartmentsModule,

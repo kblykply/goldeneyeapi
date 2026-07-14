@@ -20,6 +20,12 @@ enum PaymentPlan {
   TAKSIT_12
 }
 
+enum PriceLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
 enum Role {
   ADMIN
   REGIONAL_MANAGER
@@ -302,6 +308,26 @@ model WeekPrice {
   @@unique([unitType, weekOfYear])
   @@index([unitType])
   @@index([weekOfYear])
+}
+
+model UnitTypePrice {
+  id                 String     @id @default(cuid())
+  unitType           UnitType
+  level              PriceLevel
+  cashCents          Int
+  installment6Cents  Int
+  installment12Cents Int
+  updatedAt          DateTime   @updatedAt
+
+  @@unique([unitType, level])
+}
+
+model PricingWeek {
+  id         String     @id @default(cuid())
+  weekOfYear Int        @unique
+  level      PriceLevel @default(MEDIUM)
+  periodText String
+  updatedAt  DateTime   @updatedAt
 }
 
 model ExchangeRate {

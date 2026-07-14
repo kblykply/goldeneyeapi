@@ -7,6 +7,7 @@ import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
 import { AuditService } from "../audit/audit.service";
+import { PricingService } from "../pricing/pricing.service";
 
 const SUPPORTED_CURRENCIES = ["GBP", "EUR", "USD", "TRY"] as const;
 type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
@@ -60,15 +61,6 @@ class UpdatePresentationDto {
   paymentPlan?: "PESIN" | "ALTIN" | "TAKSIT_12";
 }
 
-function priceFromWeekPriceRow(
-  row: { cashCents: number; installment6Cents: number; installment12Cents: number },
-  plan: "PESIN" | "ALTIN" | "TAKSIT_12"
-) {
-  if (plan === "PESIN") return row.cashCents;
-  if (plan === "ALTIN") return row.installment6Cents; // UI: 6 Ay
-  return row.installment12Cents; // TAKSIT_12
-}
-
 @Controller("presentations")
 export class PresentationsController {
   constructor(
@@ -77,6 +69,7 @@ export class PresentationsController {
     private currency: CurrencyService,
     private audit: AuditService,
     private notifs: NotificationsService,
+    private pricing: PricingService,
   ) {}
 
   private notifyPresentation(
@@ -285,14 +278,9 @@ export class PresentationsController {
         ? (currencyParam as SupportedCurrency)
         : "EUR";
 
-    let periodText: string | null = null;
-    if (pres.unitType && pres.weekOfYear) {
-      const row = await this.prisma.weekPrice.findUnique({
-        where: { unitType_weekOfYear: { unitType: pres.unitType as any, weekOfYear: pres.weekOfYear } },
-        select: { periodText: true },
-      });
-      periodText = row?.periodText ?? null;
-    }
+    const periodText = pres.weekOfYear
+      ? await this.pricing.getPeriodText(pres.weekOfYear)
+      : null;
 
     const price =
       pres.basePriceCents != null
@@ -357,17 +345,14 @@ export class PresentationsController {
     let periodText: string | null = null;
 
     if (merged.unitType && merged.weekOfYear && merged.paymentPlan) {
-      const row = await this.prisma.weekPrice.findUnique({
-        where: { unitType_weekOfYear: { unitType: merged.unitType, weekOfYear: merged.weekOfYear } },
-        select: { cashCents: true, installment6Cents: true, installment12Cents: true, periodText: true },
-      });
+      const resolved = await this.pricing.resolve(merged.unitType, merged.weekOfYear, merged.paymentPlan);
 
-      if (!row) {
+      if (!resolved) {
         return { ok: false, message: "Fiyat tablosunda bu ünite/hafta bulunamadı" };
       }
 
-      basePriceCents = priceFromWeekPriceRow(row, merged.paymentPlan);
-      periodText = row.periodText;
+      basePriceCents = resolved.basePriceCents;
+      periodText = resolved.periodText;
     }
 
     const updated = await this.prisma.presentation.update({
@@ -433,10 +418,7 @@ export class PresentationsController {
       return { ok: false, message: "Sunum tamamlanmamış" };
     }
 
-    const weekPrice = await this.prisma.weekPrice.findUnique({
-      where: { unitType_weekOfYear: { unitType: pres.unitType, weekOfYear: pres.weekOfYear } },
-      select: { periodText: true },
-    });
+    const periodText = await this.pricing.getPeriodText(pres.weekOfYear);
 
     let regionalManager: { fullName: string; phoneE164: string } | null = null;
     let currentLeaderId = pres.salesperson.leaderId;
@@ -455,7 +437,7 @@ export class PresentationsController {
 
     return {
       ok: true,
-      periodText: weekPrice?.periodText ?? `${pres.weekOfYear}. Hafta`,
+      periodText: periodText ?? `${pres.weekOfYear}. Hafta`,
       regionalManager,
     };
   }

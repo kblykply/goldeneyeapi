@@ -11,6 +11,7 @@ import { CommissionService } from "../commissions/commission.service";
 import { TeamService } from "../team/team.service";
 import { SmsService } from "../sms/sms.service";
 import { NotificationsService } from "../notifications/notifications.service";
+import { PricingService } from "../pricing/pricing.service";
 import { ConfigService } from "@nestjs/config";
 import { createClient } from "@supabase/supabase-js";
 
@@ -91,6 +92,7 @@ export class ContractsController {
     private notifs: NotificationsService,
     private config: ConfigService,
     private audit: AuditService,
+    private pricing: PricingService,
   ) {
     this.supabase = createClient(
       this.config.get<string>("SUPABASE_URL") ?? "",
@@ -518,11 +520,7 @@ export class ContractsController {
 
     if (!canAccess) return { ok: false, message: "Yetkisiz" };
 
-    // WeekPrice'tan periodText al
-    const weekPrice = await this.prisma.weekPrice.findUnique({
-      where: { unitType_weekOfYear: { unitType: c.unitType, weekOfYear: c.weekOfYear } },
-      select: { periodText: true },
-    });
+    const periodText = await this.pricing.getPeriodText(c.weekOfYear);
 
     // Hiyerarşide REGIONAL_MANAGER'ı bul
     let regionalManager: { fullName: string; phoneE164: string } | null = null;
@@ -542,7 +540,7 @@ export class ContractsController {
 
     return {
       ok: true,
-      periodText: weekPrice?.periodText ?? `${c.weekOfYear}. Hafta`,
+      periodText: periodText ?? `${c.weekOfYear}. Hafta`,
       regionalManager,
     };
   }
@@ -587,11 +585,8 @@ export class ContractsController {
       return { ok: false, message: "Sözleşme bulunamadı" };
     }
 
-    const weekPrice = c.unitType && c.weekOfYear
-      ? await this.prisma.weekPrice.findUnique({
-          where: { unitType_weekOfYear: { unitType: c.unitType, weekOfYear: c.weekOfYear } },
-          select: { periodText: true },
-        })
+    const weekPeriodText = c.weekOfYear
+      ? await this.pricing.getPeriodText(c.weekOfYear)
       : null;
 
     const supabaseUrl = this.config.get<string>("SUPABASE_URL") ?? "";
@@ -612,7 +607,7 @@ export class ContractsController {
 
     const publicUrl = `${supabaseUrl}/storage/v1/object/public/contracts/${filePath}`;
 
-    const periodText = weekPrice?.periodText ?? (c.weekOfYear ? `${c.weekOfYear}. Hafta` : "-");
+    const periodText = weekPeriodText ?? (c.weekOfYear ? `${c.weekOfYear}. Hafta` : "-");
     const installments = c.customPaymentPlan?.installments ?? [];
     const effectiveBasePriceCents = installments.length > 0
       ? installments.reduce((s, i) => s + i.baseAmountCents, 0)
