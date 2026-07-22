@@ -461,14 +461,19 @@ export class UsersController {
   }
 
   @Delete(":id")
-  @UseGuards(RolesGuard)
-  @Roles("ADMIN")
   async deleteUser(
     @Param("id") id: string,
     @Req() req: Request & { user: AuthedUser }
   ) {
     if (req.user.id === id) {
       return { ok: false, message: "Kendinizi silemezsiniz" };
+    }
+
+    if (req.user.role !== "ADMIN") {
+      const ancestors = await this.teamService.getAncestorIds(id);
+      if (!ancestors.includes(req.user.id)) {
+        return { ok: false, message: "Bu kullanıcı sizin ekibinizde değil" };
+      }
     }
 
     const activeDownline = await this.prisma.user.findMany({
@@ -497,14 +502,20 @@ export class UsersController {
   }
 
   @Post(":id/reassign-and-delete")
-  @UseGuards(RolesGuard)
-  @Roles("ADMIN")
   async reassignAndDelete(
     @Param("id") id: string,
     @Body() body: ReassignAndDeleteDto,
     @Req() req: Request & { user: AuthedUser }
   ) {
     if (req.user.id === id) return { ok: false, message: "Kendinizi silemezsiniz" };
+
+    const isAdmin = req.user.role === "ADMIN";
+    if (!isAdmin) {
+      const ancestors = await this.teamService.getAncestorIds(id);
+      if (!ancestors.includes(req.user.id)) {
+        return { ok: false, message: "Bu kullanıcı sizin ekibinizde değil" };
+      }
+    }
 
     const actualDownline = await this.prisma.user.findMany({
       where: { leaderId: id, isActive: true },
@@ -522,6 +533,14 @@ export class UsersController {
     const targetLeaderIds = [...new Set(body.assignments.map((a) => a.newLeaderId))];
     if (targetLeaderIds.includes(id)) {
       return { ok: false, message: "Silinen kullanıcı yeni lider olamaz" };
+    }
+    if (!isAdmin) {
+      const leaderAncestorLists = await Promise.all(
+        targetLeaderIds.map((lid) => this.teamService.getAncestorIds(lid))
+      );
+      if (leaderAncestorLists.some((ancestors) => !ancestors.includes(req.user.id))) {
+        return { ok: false, message: "Seçilen lider sizin ekibinizde değil" };
+      }
     }
 
     const targetLeaders = await this.prisma.user.findMany({
