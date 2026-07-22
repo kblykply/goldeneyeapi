@@ -14,6 +14,7 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { PricingService } from "../pricing/pricing.service";
 import { ConfigService } from "@nestjs/config";
 import { createClient } from "@supabase/supabase-js";
+import { DEFAULT_CUSTOMER_NAME } from "../customers/customer.constants";
 
 const PLAN_LABELS: Record<string, string> = {
   PESIN: "Peşin",
@@ -123,6 +124,10 @@ export class ContractsController {
 
     if (!pres.unitType || !pres.weekOfYear || !pres.paymentPlan || !pres.basePriceCents) {
       return { ok: false, message: "Sunum tamamlanmamış (unit/hafta/plan/fiyat eksik)" };
+    }
+
+    if (!pres.customer.phoneE164 || pres.customer.fullName === DEFAULT_CUSTOMER_NAME) {
+      return { ok: false, message: "Sözleşme için müşteri adı ve telefonu gerekli" };
     }
 
     const existing = await this.prisma.contract.findFirst({
@@ -616,6 +621,15 @@ export class ContractsController {
       ? (effectiveBasePriceCents / 100).toLocaleString("tr-TR", { minimumFractionDigits: 0 })
       : "-";
     const planLabel = (c.paymentPlan && PLAN_LABELS[c.paymentPlan]) ?? "-";
+
+    if (!c.customer.phoneE164) {
+      return {
+        ok: true,
+        docUrl: publicUrl,
+        fileName: filePath.split("/").pop(),
+        message: "Müşteri telefonu olmadığı için WhatsApp gönderilmedi",
+      };
+    }
 
     await this.sms.sendWhatsApp(c.customer.phoneE164, {
       "1": c.customer.fullName,

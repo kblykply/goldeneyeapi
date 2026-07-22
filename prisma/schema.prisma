@@ -103,8 +103,12 @@ model Customer {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
 
-  fullName  String
-  phoneE164 String @unique
+  fullName       String
+  phoneE164      String? @unique
+  nationality    String?
+  passportNumber String?
+  email          String?
+  address        String?
 
   presentations Presentation[]
   contracts     Contract[]

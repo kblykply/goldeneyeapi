@@ -5,21 +5,67 @@ import { CurrencyService } from "../currency/currency.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { AuthedUser } from "../auth/auth.types";
 import { Request } from "express";
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
+import { IsBoolean, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
 import { AuditService } from "../audit/audit.service";
 import { PricingService } from "../pricing/pricing.service";
+import { DEFAULT_CUSTOMER_NAME } from "../customers/customer.constants";
 
 const SUPPORTED_CURRENCIES = ["GBP", "EUR", "USD", "TRY"] as const;
 type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
-const SALES_SKIP_OTP_ALLOWED_USER_IDS = new Set(["cmmkch0iz0003ob2pmvz0qqd4"]);
+
+const CUSTOMER_PROFILE_SELECT = {
+  id: true,
+  fullName: true,
+  phoneE164: true,
+  nationality: true,
+  passportNumber: true,
+  email: true,
+  address: true,
+} as const;
+
+function missingInfoOf(customer: { fullName: string; phoneE164: string | null }) {
+  return {
+    name: customer.fullName === DEFAULT_CUSTOMER_NAME,
+    phone: !customer.phoneE164,
+  };
+}
 
 class StartPresentationDto {
+  @IsOptional()
   @IsString()
-  customerFullName!: string;
+  customerFullName?: string;
 
+  @IsOptional()
   @IsString()
   @Matches(/^\+\d{10,15}$/)
-  customerPhoneE164!: string;
+  customerPhoneE164?: string;
+}
+
+class UpdatePresentationCustomerDto {
+  @IsOptional()
+  @IsString()
+  fullName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\+\d{10,15}$/)
+  phoneE164?: string;
+
+  @IsOptional()
+  @IsString()
+  nationality?: string;
+
+  @IsOptional()
+  @IsString()
+  passportNumber?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  address?: string;
 }
 
 class VerifyOtpDto {
@@ -82,6 +128,22 @@ export class PresentationsController {
     this.notifs.create({ type, title, body, actorId, entityId: presentationId, entityType: "PRESENTATION" }).catch(() => {});
   }
 
+  // Telefon varsa telefona göre upsert (girilen isim varsa günceller, placeholder ile ezmez);
+  // telefon yoksa yeni telefonsuz müşteri oluşturur.
+  private resolveCustomer(fullName?: string, phoneE164?: string) {
+    const name = fullName?.trim();
+    if (phoneE164) {
+      return this.prisma.customer.upsert({
+        where: { phoneE164 },
+        update: name ? { fullName: name } : {},
+        create: { fullName: name || DEFAULT_CUSTOMER_NAME, phoneE164 },
+      });
+    }
+    return this.prisma.customer.create({
+      data: { fullName: name || DEFAULT_CUSTOMER_NAME, phoneE164: null },
+    });
+  }
+
   @Post("start")
   async start(
     @Body() body: StartPresentationDto,
@@ -89,11 +151,11 @@ export class PresentationsController {
   ) {
     const me = req.user;
 
-    const customer = await this.prisma.customer.upsert({
-      where: { phoneE164: body.customerPhoneE164 },
-      update: { fullName: body.customerFullName },
-      create: { fullName: body.customerFullName, phoneE164: body.customerPhoneE164 },
-    });
+    if (!body.customerPhoneE164) {
+      return { ok: false, message: "OTP ile başlatmak için telefon numarası gerekli." };
+    }
+
+    const customer = await this.resolveCustomer(body.customerFullName, body.customerPhoneE164);
 
     const pres = await this.prisma.presentation.create({
       data: {
@@ -136,6 +198,7 @@ export class PresentationsController {
     };
   }
 
+  // OTP'siz başlatma: tüm yetkili kullanıcılara açık; isim ve telefon opsiyonel.
   @Post("admin/start-skip-otp")
   async adminStartSkipOtp(
     @Body() body: StartPresentationDto,
@@ -143,16 +206,7 @@ export class PresentationsController {
   ) {
     const me = req.user;
 
-    const canSkipOtp = me.role === "ADMIN" || SALES_SKIP_OTP_ALLOWED_USER_IDS.has(me.id);
-    if (!canSkipOtp) {
-      return { ok: false, message: "Yetkisiz işlem" };
-    }
-
-    const customer = await this.prisma.customer.upsert({
-      where: { phoneE164: body.customerPhoneE164 },
-      update: { fullName: body.customerFullName },
-      create: { fullName: body.customerFullName, phoneE164: body.customerPhoneE164 },
-    });
+    const customer = await this.resolveCustomer(body.customerFullName, body.customerPhoneE164);
 
     const pres = await this.prisma.presentation.create({
       data: {
@@ -199,6 +253,10 @@ export class PresentationsController {
 
     if (!pres || pres.salespersonId !== me.id) {
       return { ok: false, message: "Sunum bulunamadı" };
+    }
+
+    if (!pres.customer.phoneE164) {
+      return { ok: false, message: "Müşterinin telefon numarası yok" };
     }
 
     const result = await this.otp.verifyOtp({
@@ -265,7 +323,7 @@ export class PresentationsController {
     const pres = await this.prisma.presentation.findUnique({
       where: { id },
       include: {
-        customer: { select: { fullName: true, phoneE164: true } },
+        customer: { select: CUSTOMER_PROFILE_SELECT },
       },
     });
 
@@ -302,6 +360,7 @@ export class PresentationsController {
         currency: targetCurrency,
         periodText,
         customer: pres.customer,
+        missingInfo: missingInfoOf(pres.customer),
       },
     };
   }
@@ -365,7 +424,7 @@ export class PresentationsController {
         paymentPlan: body.paymentPlan ?? undefined,
         basePriceCents: basePriceCents ?? null,
       },
-      include: { customer: { select: { fullName: true, phoneE164: true } } },
+      include: { customer: { select: CUSTOMER_PROFILE_SELECT } },
     });
 
     const price =
@@ -396,8 +455,113 @@ export class PresentationsController {
         currency: targetCurrency,
         periodText,
         customer: updated.customer,
+        missingInfo: missingInfoOf(updated.customer),
       },
     };
+  }
+
+  @Patch(":id/customer")
+  async updateCustomerProfile(
+    @Param("id") id: string,
+    @Body() body: UpdatePresentationCustomerDto,
+    @Req() req: Request & { user: AuthedUser },
+  ) {
+    const me = req.user;
+
+    const pres = await this.prisma.presentation.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        salespersonId: true,
+        customer: { select: CUSTOMER_PROFILE_SELECT },
+      },
+    });
+
+    if (!pres || (pres.salespersonId !== me.id && me.role !== "ADMIN")) {
+      return { ok: false, message: "Sunum bulunamadı" };
+    }
+
+    const current = pres.customer;
+    const profileData: Record<string, string> = {};
+    for (const key of ["nationality", "passportNumber", "email", "address"] as const) {
+      const value = body[key]?.trim();
+      if (value) profileData[key] = value;
+    }
+    const name = body.fullName?.trim();
+    if (name) profileData.fullName = name;
+
+    let relinked: { fromCustomerId: string; toCustomerId: string; orphanDeleted: boolean } | null = null;
+
+    try {
+      const customer = await this.prisma.$transaction(async (tx) => {
+        if (body.phoneE164 && body.phoneE164 !== current.phoneE164) {
+          const existing = await tx.customer.findUnique({
+            where: { phoneE164: body.phoneE164 },
+            select: { id: true },
+          });
+
+          if (existing && existing.id !== current.id) {
+            // Telefon başka müşteride kayıtlı: sunumu ona bağla, boşta kalan
+            // telefonsuz geçici kaydı temizle.
+            const target = await tx.customer.update({
+              where: { id: existing.id },
+              data: profileData,
+              select: CUSTOMER_PROFILE_SELECT,
+            });
+            await tx.presentation.update({
+              where: { id: pres.id },
+              data: { customerId: existing.id },
+            });
+
+            let orphanDeleted = false;
+            if (!current.phoneE164) {
+              const [presCount, contractCount] = await Promise.all([
+                tx.presentation.count({ where: { customerId: current.id } }),
+                tx.contract.count({ where: { customerId: current.id } }),
+              ]);
+              if (presCount === 0 && contractCount === 0) {
+                await tx.customerNote.deleteMany({ where: { customerId: current.id } });
+                await tx.customer.delete({ where: { id: current.id } });
+                orphanDeleted = true;
+              }
+            }
+
+            relinked = { fromCustomerId: current.id, toCustomerId: existing.id, orphanDeleted };
+            return target;
+          }
+
+          return tx.customer.update({
+            where: { id: current.id },
+            data: { ...profileData, phoneE164: body.phoneE164 },
+            select: CUSTOMER_PROFILE_SELECT,
+          });
+        }
+
+        return tx.customer.update({
+          where: { id: current.id },
+          data: profileData,
+          select: CUSTOMER_PROFILE_SELECT,
+        });
+      });
+
+      await this.audit.log({
+        action: "CUSTOMER_UPDATED",
+        entityType: "CUSTOMER",
+        entityId: customer.id,
+        presentationId: pres.id,
+        meta: {
+          fields: Object.keys(profileData).concat(body.phoneE164 ? ["phoneE164"] : []),
+          ...(relinked ? { relink: relinked } : {}),
+        },
+      });
+
+      return { ok: true, customer, missingInfo: missingInfoOf(customer) };
+    } catch (e: any) {
+      if (e?.code === "P2002") {
+        return { ok: false, message: "Bu telefon başka bir müşteriye kayıtlı, lütfen tekrar deneyin." };
+      }
+      throw e;
+    }
   }
 
   
