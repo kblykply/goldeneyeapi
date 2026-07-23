@@ -41,32 +41,29 @@ export class MeController {
 
     const todayStart = startOfToday();
 
-    // ✅ 1) count() ile kesin sayı
-    const presentationsToday = await this.prisma.presentation.count({
-      where: { salespersonId: me.id, createdAt: { gte: todayStart } },
-    });
+    // Tek aggregate (sayı + süre toplamı) + tek groupBy (3 status sayacı), paralel
+    const [presAgg, contractCounts] = await Promise.all([
+      this.prisma.presentation.aggregate({
+        where: { salespersonId: me.id, createdAt: { gte: todayStart } },
+        _count: { _all: true },
+        _sum: { durationSec: true },
+      }),
+      this.prisma.contract.groupBy({
+        by: ["status"],
+        where: { salespersonId: me.id, status: { in: ["CUSTOMER_CONFIRMED", "APPROVED", "REJECTED"] } },
+        _count: { _all: true },
+      }),
+    ]);
 
-    // ✅ 2) süre toplamı (ENDED olanlar dolu olur, OPENED olanlar 0 kalır)
-    const presSum = await this.prisma.presentation.aggregate({
-      where: { salespersonId: me.id, createdAt: { gte: todayStart } },
-      _sum: { durationSec: true },
-    });
-
+    const presentationsToday = presAgg._count._all;
     const totalPresentationMinutesToday =
-      Math.round(((presSum._sum.durationSec ?? 0) / 60) * 10) / 10;
+      Math.round(((presAgg._sum.durationSec ?? 0) / 60) * 10) / 10;
 
-    // ✅ Sprint 3: Yetkili onayı bekleyen = CUSTOMER_CONFIRMED
-    const pendingAuthority = await this.prisma.contract.count({
-      where: { salespersonId: me.id, status: "CUSTOMER_CONFIRMED" },
-    });
-
-    const approved = await this.prisma.contract.count({
-      where: { salespersonId: me.id, status: "APPROVED" },
-    });
-
-    const rejected = await this.prisma.contract.count({
-      where: { salespersonId: me.id, status: "REJECTED" },
-    });
+    const byStatus = new Map(contractCounts.map((r) => [r.status, r._count._all]));
+    // Yetkili onayı bekleyen = CUSTOMER_CONFIRMED
+    const pendingAuthority = byStatus.get("CUSTOMER_CONFIRMED") ?? 0;
+    const approved = byStatus.get("APPROVED") ?? 0;
+    const rejected = byStatus.get("REJECTED") ?? 0;
 
     return {
       ok: true,

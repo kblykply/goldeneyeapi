@@ -5,10 +5,25 @@ import { NotificationType } from "@prisma/client";
 
 @Injectable()
 export class NotificationsService {
+  // Restart sonrası eski ETag'lerin yanlışlıkla 304 almasını önler
+  private readonly bootId = Date.now().toString(36);
+  private globalVersion = 0;
+  private readonly readVersions = new Map<string, number>();
+
   constructor(
     private prisma: PrismaService,
     private team: TeamService,
   ) {}
+
+  etagFor(userId: string) {
+    // userId ETag'e dahil: aynı tarayıcıda kullanıcı değişince eski kullanıcının
+    // cache'lenmiş gövdesi 304 ile servis edilemez
+    return `W/"n:${this.bootId}:${userId}:${this.globalVersion}:${this.readVersions.get(userId) ?? 0}"`;
+  }
+
+  private bumpReadVersion(userId: string) {
+    this.readVersions.set(userId, (this.readVersions.get(userId) ?? 0) + 1);
+  }
 
   async create(data: {
     type: NotificationType;
@@ -19,7 +34,9 @@ export class NotificationsService {
     entityId?: string;
     entityType?: string;
   }) {
-    return this.prisma.notification.create({ data });
+    const created = await this.prisma.notification.create({ data });
+    this.globalVersion++;
+    return created;
   }
 
   private async broadcastFilter(userId: string, role: string) {
@@ -68,6 +85,7 @@ export class NotificationsService {
       update: {},
       create: { notificationId, userId },
     });
+    this.bumpReadVersion(userId);
   }
 
   async markAllAsRead(userId: string, role: string) {
@@ -85,5 +103,6 @@ export class NotificationsService {
       data: notifs.map((n) => ({ notificationId: n.id, userId })),
       skipDuplicates: true,
     });
+    this.bumpReadVersion(userId);
   }
 }

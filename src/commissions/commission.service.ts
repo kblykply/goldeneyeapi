@@ -1,19 +1,32 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { CacheService } from "../cache/cache.service";
+
+const CONFIG_CACHE_KEY = "commission:config";
+const CONFIG_CACHE_TTL_MS = 10 * 60_000;
 
 @Injectable()
 export class CommissionService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private cache: CacheService,
+  ) {}
 
   /**
    * Singleton config — DB'den yükle, yoksa defaults ile oluştur.
    */
   async getConfig() {
-    const existing = await this.prisma.commissionConfig.findUnique({
-      where: { id: "singleton" },
+    return this.cache.getOrSet(CONFIG_CACHE_KEY, CONFIG_CACHE_TTL_MS, async () => {
+      const existing = await this.prisma.commissionConfig.findUnique({
+        where: { id: "singleton" },
+      });
+      if (existing) return existing;
+      return this.prisma.commissionConfig.create({ data: { id: "singleton" } });
     });
-    if (existing) return existing;
-    return this.prisma.commissionConfig.create({ data: { id: "singleton" } });
+  }
+
+  invalidateConfigCache() {
+    this.cache.del(CONFIG_CACHE_KEY);
   }
 
   /**

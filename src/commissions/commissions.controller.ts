@@ -66,6 +66,8 @@ export class CommissionsController {
       meta: data,
     });
 
+    this.commissionService.invalidateConfigCache();
+
     return { ok: true, config };
   }
 

@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { PaymentPlan, PriceLevel, UnitType } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { CacheService } from "../cache/cache.service";
 
 type PlanPriceRow = {
   cashCents: number;
@@ -28,9 +29,42 @@ export type UnitPriceUpdateItem = {
   installment12Cents?: number;
 };
 
+const PRICING_CACHE_KEY = "pricing:all";
+const PRICING_CACHE_TTL_MS = 10 * 60_000;
+
 @Injectable()
 export class PricingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+  ) {}
+
+  /** Fiyat tabloları nadiren değişir; tamamı tek anahtar altında cache'lenir. */
+  private loadSnapshot() {
+    return this.cache.getOrSet(PRICING_CACHE_KEY, PRICING_CACHE_TTL_MS, async () => {
+      const [weeks, unitPrices] = await Promise.all([
+        this.prisma.pricingWeek.findMany({
+          orderBy: { weekOfYear: "asc" },
+          select: { weekOfYear: true, level: true, periodText: true },
+        }),
+        this.prisma.unitTypePrice.findMany({
+          orderBy: [{ unitType: "asc" }, { level: "asc" }],
+          select: {
+            unitType: true,
+            level: true,
+            cashCents: true,
+            installment6Cents: true,
+            installment12Cents: true,
+          },
+        }),
+      ]);
+      return { weeks, unitPrices };
+    });
+  }
+
+  private invalidateCache() {
+    this.cache.del(PRICING_CACHE_KEY);
+  }
 
   /**
    * Hafta -> seviye -> (unitType, seviye) satırı -> plan kolonu.
@@ -41,13 +75,11 @@ export class PricingService {
     weekOfYear: number,
     plan: PaymentPlan,
   ): Promise<ResolvedPrice | null> {
-    const [week, priceRows] = await Promise.all([
-      this.prisma.pricingWeek.findUnique({ where: { weekOfYear } }),
-      this.prisma.unitTypePrice.findMany({ where: { unitType } }),
-    ]);
+    const { weeks, unitPrices } = await this.loadSnapshot();
+    const week = weeks.find((w) => w.weekOfYear === weekOfYear);
     if (!week) return null;
 
-    const row = priceRows.find((r) => r.level === week.level);
+    const row = unitPrices.find((r) => r.unitType === unitType && r.level === week.level);
     if (!row) return null;
 
     return {
@@ -58,31 +90,12 @@ export class PricingService {
   }
 
   async getPeriodText(weekOfYear: number): Promise<string | null> {
-    const week = await this.prisma.pricingWeek.findUnique({
-      where: { weekOfYear },
-      select: { periodText: true },
-    });
-    return week?.periodText ?? null;
+    const { weeks } = await this.loadSnapshot();
+    return weeks.find((w) => w.weekOfYear === weekOfYear)?.periodText ?? null;
   }
 
   async getConfig() {
-    const [weeks, unitPrices] = await Promise.all([
-      this.prisma.pricingWeek.findMany({
-        orderBy: { weekOfYear: "asc" },
-        select: { weekOfYear: true, level: true, periodText: true },
-      }),
-      this.prisma.unitTypePrice.findMany({
-        orderBy: [{ unitType: "asc" }, { level: "asc" }],
-        select: {
-          unitType: true,
-          level: true,
-          cashCents: true,
-          installment6Cents: true,
-          installment12Cents: true,
-        },
-      }),
-    ]);
-    return { weeks, unitPrices };
+    return this.loadSnapshot();
   }
 
   async bulkUpdateWeeks(items: WeekUpdateItem[]) {
@@ -129,6 +142,8 @@ export class PricingService {
       ),
     ]);
 
+    this.invalidateCache();
+
     const updatedCount = results.reduce(
       (sum, r) => sum + ("count" in r ? r.count : 1),
       0,
@@ -156,6 +171,7 @@ export class PricingService {
         }),
       ),
     );
+    this.invalidateCache();
     return { updatedCount: updates.length, missingKeys: [] as string[] };
   }
 

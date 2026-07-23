@@ -1,16 +1,26 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../prisma/prisma.service";
+import { CacheService } from "../cache/cache.service";
 
 const SUPPORTED: string[] = ["GBP", "EUR", "USD", "TRY"];
 const BASE = "EUR";
 const API_URL = `https://open.er-api.com/v6/latest/${BASE}`;
 
+const FX_CACHE_KEY = "fx:rates";
+// Kurlar günde bir kez cron ile yenilenir; cron sonunda cache düşürülür
+const FX_CACHE_TTL_MS = 24 * 3600_000;
+
+type RateRow = { fromCurrency: string; toCurrency: string; rate: number; updatedAt: Date };
+
 @Injectable()
 export class CurrencyService {
   private readonly logger = new Logger(CurrencyService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+  ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async refreshRatesScheduled() {
@@ -42,34 +52,36 @@ export class CurrencyService {
     }
 
     this.logger.log(`✅ Exchange rates updated: ${updated.join(", ")}`);
+    this.cache.del(FX_CACHE_KEY);
     return { updated, rates: snapshot };
   }
 
-  async getRates(): Promise<{ fromCurrency: string; toCurrency: string; rate: number; updatedAt: Date }[]> {
-    const rows = await this.prisma.exchangeRate.findMany({
-      where: { fromCurrency: BASE },
-      orderBy: { toCurrency: "asc" },
-    });
+  async getRates(): Promise<RateRow[]> {
+    return this.cache.getOrSet(FX_CACHE_KEY, FX_CACHE_TTL_MS, async () => {
+      const rows = await this.prisma.exchangeRate.findMany({
+        where: { fromCurrency: BASE },
+        orderBy: { toCurrency: "asc" },
+      });
 
-    return rows.map((r) => ({
-      fromCurrency: r.fromCurrency,
-      toCurrency: r.toCurrency,
-      rate: Number(r.rate),
-      updatedAt: r.updatedAt,
-    }));
+      return rows.map((r) => ({
+        fromCurrency: r.fromCurrency,
+        toCurrency: r.toCurrency,
+        rate: Number(r.rate),
+        updatedAt: r.updatedAt,
+      }));
+    });
   }
 
   /** Convert base-currency cents -> target currency amount (2 decimal places) */
   async convertFromBaseCents(baseCents: number, toCurrency: string): Promise<number> {
     if (toCurrency === BASE) return Math.round(baseCents) / 100;
 
-    const row = await this.prisma.exchangeRate.findUnique({
-      where: { fromCurrency_toCurrency: { fromCurrency: BASE, toCurrency } },
-    });
+    const rates = await this.getRates();
+    const row = rates.find((r) => r.toCurrency === toCurrency);
 
     if (!row) throw new Error(`No exchange rate found for ${BASE} → ${toCurrency}`);
 
     const baseAmount = baseCents / 100;
-    return Math.round(baseAmount * Number(row.rate) * 100) / 100;
+    return Math.round(baseAmount * row.rate * 100) / 100;
   }
 }

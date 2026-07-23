@@ -30,6 +30,7 @@ import { Role, NotificationType } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import { DEFAULT_PASSWORD } from "../auth/auth.constants";
 import { AuditService } from "../audit/audit.service";
+import { CacheService } from "../cache/cache.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { ConfigService } from "@nestjs/config";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
@@ -138,11 +139,18 @@ export class UsersController {
     private audit: AuditService,
     private notifs: NotificationsService,
     private config: ConfigService,
+    private cache: CacheService,
   ) {
     this.supabase = createClient(
       this.config.get<string>("SUPABASE_URL") ?? "",
       this.config.get<string>("SUPABASE_SERVICE_KEY") ?? "",
     );
+  }
+
+  // Rol/seviye/lider/isActive değişimlerinde auth ve subtree cache'lerini düşür
+  private invalidateUserCaches(...userIds: string[]) {
+    for (const uid of userIds) this.cache.del(`authuser:${uid}`);
+    this.cache.delPrefix("subtree:");
   }
 
   @Post("me/avatar")
@@ -326,6 +334,8 @@ export class UsersController {
       },
     });
 
+    this.invalidateUserCaches();
+
     this.smsService.sendWelcomeWhatsApp(user.phoneE164, user.fullName).catch((err) => this.logger.warn(`Welcome WhatsApp failed: ${err?.message}`));
 
     await this.audit.log({
@@ -438,6 +448,7 @@ export class UsersController {
         entityId: user.id,
         meta: { fields: Object.keys(patch) },
       });
+      this.invalidateUserCaches(id);
 
       // Lider veya seviye değişikliği bildirimi
       if (body.leaderId !== undefined || body.level !== undefined) {
@@ -494,6 +505,7 @@ export class UsersController {
         entityType: 'USER',
         entityId: id,
       });
+      this.invalidateUserCaches(id);
       return { ok: true };
     } catch (e: any) {
       if (e.code === "P2025") return { ok: false, message: "Kullanıcı bulunamadı" };
@@ -592,6 +604,8 @@ export class UsersController {
       });
     });
 
+    this.invalidateUserCaches(id, ...body.assignments.map((a) => a.subordinateId));
+
     return { ok: true };
   }
 
@@ -640,6 +654,7 @@ export class UsersController {
     if (subordinates.length === 0) {
       await this.prisma.user.update({ where: { id }, data: { level: body.newLevel, leaderId: body.newLeaderId } });
       await this.audit.log({ action: "USER_LEVEL_CHANGED", entityType: "USER", entityId: id, meta: { oldLevel: user.level, newLevel: body.newLevel } });
+      this.invalidateUserCaches(id);
       this.notifs.create({
         type: NotificationType.USER_LEVEL_CHANGED,
         title: "Seviyeniz Güncellendi",
@@ -668,6 +683,7 @@ export class UsersController {
           meta: { oldLevel: user.level, newLevel: body.newLevel, subNewLevel, subordinateCount: subordinates.length },
         });
       });
+      this.invalidateUserCaches(id, ...subordinates.map((s) => s.id));
       // Kullanıcıya bildirim
       this.notifs.create({
         type: NotificationType.USER_LEVEL_CHANGED,
@@ -741,6 +757,8 @@ export class UsersController {
         meta: { oldLevel: user.level, newLevel: body.newLevel, assignments },
       });
     });
+
+    this.invalidateUserCaches(id, ...assignments.map((a) => a.subordinateId));
 
     // Kullanıcıya bildirim
     this.notifs.create({

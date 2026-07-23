@@ -107,26 +107,17 @@ export class TeamController {
         }
       }
     } else {
-      all = [rootUser];
-      let frontier = [actualRootId];
-      const visited = new Set(frontier);
-
-      while (frontier.length > 0) {
-        const children = await this.prisma.user.findMany({
-          where: { leaderId: { in: frontier }, isActive: true },
-          select: selectFields,
-        });
-
-        const next: string[] = [];
-        for (const u of children) {
-          if (!visited.has(u.id)) {
-            visited.add(u.id);
-            all.push(u);
-            next.push(u.id);
-          }
-        }
-        frontier = next;
-      }
+      // Seviye başına findMany atan BFS yerine tek recursive CTE (cache'li)
+      const subtreeIds = await this.team.getSubtreeIds(actualRootId);
+      subtreeIds.delete(actualRootId);
+      const descendants =
+        subtreeIds.size > 0
+          ? await this.prisma.user.findMany({
+              where: { id: { in: [...subtreeIds] }, isActive: true },
+              select: selectFields,
+            })
+          : [];
+      all = [rootUser, ...descendants];
     }
 
     const ids = all.map((u) => u.id);
@@ -134,19 +125,20 @@ export class TeamController {
     const todayStart = startOfToday();
     const weekStart = daysAgo(7);
 
-    const presToday = await this.prisma.presentation.groupBy({
-      by: ["salespersonId"],
-      where: { salespersonId: { in: ids }, createdAt: { gte: todayStart } },
-      _count: { _all: true },
-      _sum: { durationSec: true },
-    });
-
-    const pres7d = await this.prisma.presentation.groupBy({
-      by: ["salespersonId"],
-      where: { salespersonId: { in: ids }, createdAt: { gte: weekStart } },
-      _count: { _all: true },
-      _sum: { durationSec: true },
-    });
+    const [presToday, pres7d] = await Promise.all([
+      this.prisma.presentation.groupBy({
+        by: ["salespersonId"],
+        where: { salespersonId: { in: ids }, createdAt: { gte: todayStart } },
+        _count: { _all: true },
+        _sum: { durationSec: true },
+      }),
+      this.prisma.presentation.groupBy({
+        by: ["salespersonId"],
+        where: { salespersonId: { in: ids }, createdAt: { gte: weekStart } },
+        _count: { _all: true },
+        _sum: { durationSec: true },
+      }),
+    ]);
 
     const todayMap = new Map<string, { c: number; s: number }>();
     for (const row of presToday) {

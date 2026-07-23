@@ -3,6 +3,7 @@ import { APP_GUARD } from "@nestjs/core";
 import { ConfigModule } from "@nestjs/config";
 import { AuthGuard } from "./auth/auth.guard";
 import { PrismaModule } from "./prisma/prisma.module";
+import { CacheModule } from "./cache/cache.module";
 import { AuthModule } from "./auth/auth.module";
 import { MeModule } from "./me/me.module";
 import { AuthorityModule } from "./authority/authority.module";
@@ -32,6 +33,7 @@ import { CustomerPortalModule } from "./customer-portal/customer-portal.module";
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
+    CacheModule,
     AuditModule,
     AuthModule,
     MeModule,
