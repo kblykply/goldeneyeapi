@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Get, Logger, Param, Post, Req, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthedUser } from "../auth/auth.types";
@@ -17,7 +17,13 @@ import { createClient } from "@supabase/supabase-js";
 import { DEFAULT_CUSTOMER_NAME } from "../customers/customer.constants";
 import { createPortalToken, getPortalSecret } from "../customer-portal/portal-token.utils";
 
-const PORTAL_LINK_TTL_MS = 30 * 60 * 1000;
+// Token ömrü teslim kanalına göre seçilir: sunum ekranından açılan link hemen
+// kullanılır, WhatsApp'a gönderilene saatler sonra tıklanabilir. Süresi dolan
+// link müşteriyi OTP girişine yönlendirir, kilitli kalmaz.
+const PORTAL_LINK_TTL_MS = {
+  DIRECT: 30 * 60 * 1000,
+  WHATSAPP: 24 * 60 * 60 * 1000,
+} as const;
 
 const PLAN_LABELS: Record<string, string> = {
   PESIN: "Peşin",
@@ -86,6 +92,7 @@ class CreateContractFromPresentationDto {
 
 @Controller("contracts")
 export class ContractsController {
+  private readonly logger = new Logger(ContractsController.name);
   private supabase: ReturnType<typeof createClient>;
 
   constructor(
@@ -212,25 +219,91 @@ export class ContractsController {
       return { ok: false, message: "Sözleşme bulunamadı" };
     }
 
-    const token = createPortalToken(
-      { customerId: c.customerId, contractId: c.id, expiresAt: Date.now() + PORTAL_LINK_TTL_MS },
-      getPortalSecret(this.config)
-    );
-
-    const frontendUrl = this.config.get("FRONTEND_URL", "");
-    // Prefix'siz link: sitenin middleware'i ziyaretçinin dilini tespit edip
-    // query'yi koruyarak /{locale}/payment-tracking'e yönlendirir
-    const url = `${frontendUrl}/payment-tracking?token=${encodeURIComponent(token)}`;
+    const ttlMs = PORTAL_LINK_TTL_MS.DIRECT;
 
     await this.audit.log({
       action: "CUSTOMER_PORTAL_LINK_CREATED",
       entityType: "CONTRACT",
       entityId: c.id,
       contractId: c.id,
-      meta: { customerId: c.customerId, ttlMs: PORTAL_LINK_TTL_MS },
+      meta: { customerId: c.customerId, ttlMs, channel: "DIRECT" },
     });
 
-    return { ok: true, url };
+    return { ok: true, url: this.buildPortalUrl(c.customerId, c.id, ttlMs) };
+  }
+
+  /**
+   * Ödeme takip linkini müşterinin WhatsApp'ına gönderir
+   * POST /contracts/:id/send-portal-link-whatsapp
+   */
+  @Post(":id/send-portal-link-whatsapp")
+  async sendPortalLinkWhatsApp(
+    @Param("id") id: string,
+    @Req() req: Request & { user: AuthedUser }
+  ) {
+    const me = req.user;
+
+    const c = await this.prisma.contract.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        customerId: true,
+        salespersonId: true,
+        customer: { select: { fullName: true, phoneE164: true } },
+      },
+    });
+
+    if (!c || c.salespersonId !== me.id) {
+      return { ok: false, message: "Sözleşme bulunamadı" };
+    }
+
+    if (!c.customer.phoneE164) {
+      return { ok: false, message: "Müşterinin telefon numarası kayıtlı değil" };
+    }
+
+    const ttlMs = PORTAL_LINK_TTL_MS.WHATSAPP;
+    const url = this.buildPortalUrl(c.customerId, c.id, ttlMs);
+
+    try {
+      const msg = await this.sms.sendPaymentTrackingWhatsApp(
+        c.customer.phoneE164,
+        c.customer.fullName,
+        url
+      );
+
+      await this.audit.log({
+        action: "CUSTOMER_PORTAL_LINK_WHATSAPP_SENT",
+        entityType: "CONTRACT",
+        entityId: c.id,
+        contractId: c.id,
+        meta: {
+          customerId: c.customerId,
+          ttlMs,
+          channel: "WHATSAPP",
+          phoneE164: c.customer.phoneE164,
+          messageSid: msg.sid,
+          status: msg.status,
+        },
+      });
+
+      return { ok: true };
+    } catch (err: any) {
+      // Twilio hatası (onaysız template, kayıtsız numara, kota) sessizce yutulmamalı
+      this.logger.error(`Ödeme takip WhatsApp gönderilemedi (contract=${c.id}): ${err?.message}`);
+      return { ok: false, message: err?.message ?? "WhatsApp mesajı gönderilemedi" };
+    }
+  }
+
+  private buildPortalUrl(customerId: string, contractId: string, ttlMs: number): string {
+    const token = createPortalToken(
+      { customerId, contractId, expiresAt: Date.now() + ttlMs },
+      getPortalSecret(this.config)
+    );
+
+    const frontendUrl = this.config.get("FRONTEND_URL", "");
+    // Prefix'siz link: sitenin middleware'i ziyaretçinin dilini tespit edip
+    // query'yi koruyarak /{locale}/payment-tracking'e yönlendirir
+    return `${frontendUrl}/payment-tracking?token=${encodeURIComponent(token)}`;
   }
 
   /**

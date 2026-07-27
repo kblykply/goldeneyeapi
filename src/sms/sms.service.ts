@@ -9,6 +9,7 @@ export class SmsService {
   private whatsappFrom: string;
   private contentSid: string;
   private welcomeContentSid: string;
+  private paymentContentSid: string;
   private appUrl: string;
 
   constructor(private config: ConfigService) {
@@ -18,6 +19,7 @@ export class SmsService {
     this.whatsappFrom = this.config.get<string>("TWILIO_WHATSAPP_FROM") ?? "";
     this.contentSid = this.config.get<string>("TWILIO_CONTENT_SID") ?? "";
     this.welcomeContentSid = this.config.get<string>("TWILIO_WELCOME_CONTENT_SID") ?? "";
+    this.paymentContentSid = this.config.get<string>("TWILIO_PAYMENT_CONTENT_SID") ?? "";
     this.appUrl = this.config.get<string>("APP_URL") ?? "";
 
     this.client = Twilio(sid || "", token || "");
@@ -37,7 +39,12 @@ export class SmsService {
     return { valid: check.status === "approved" };
   }
 
+  // Template SID'i boşsa Twilio opak bir 400 döner; hangi env'in eksik
+  // olduğunu söyleyen hata her gönderici için burada üretilir.
   async sendWhatsApp(toE164: string, variables: Record<string, string>, contentSid = this.contentSid) {
+    if (!contentSid) {
+      throw new Error("Twilio WhatsApp template SID'i tanımlı değil (TWILIO_*_CONTENT_SID)");
+    }
     const msg = await this.client.messages.create({
       from: this.whatsappFrom,
       to: `whatsapp:${toE164}`,
@@ -49,5 +56,10 @@ export class SmsService {
 
   async sendWelcomeWhatsApp(toE164: string, fullName: string) {
     return this.sendWhatsApp(toE164, { "1": fullName, "2": this.appUrl }, this.welcomeContentSid);
+  }
+
+  // Ödeme takip sayfası linki (payment_tracking_tr template'i: {{1}} isim, {{2}} link)
+  async sendPaymentTrackingWhatsApp(toE164: string, fullName: string, url: string) {
+    return this.sendWhatsApp(toE164, { "1": fullName, "2": url }, this.paymentContentSid);
   }
 }

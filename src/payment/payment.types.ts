@@ -5,6 +5,9 @@ export interface EnrollmentParams {
   mpiTransactionId: string;
   cardholderName: string;
   locale?: string;
+  // Banka mesaj log'unu işleme bağlamak için (kanıt/mutabakat)
+  posTransactionId?: string;
+  contractId?: string;
 }
 
 export interface EnrollmentResult {
@@ -26,6 +29,9 @@ export interface VposParams {
   cavv: string;
   clientIp: string;
   mpiTransactionId: string;
+  // Banka mesaj log'unu işleme bağlamak için (kanıt/mutabakat)
+  posTransactionId?: string;
+  contractId?: string;
 }
 
 export interface VposResult {

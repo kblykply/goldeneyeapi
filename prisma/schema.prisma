@@ -69,7 +69,7 @@ model User {
   lastSeenAt DateTime?
   avatarUrl  String?
 
-  commissionRate Float?   // only for SPECIAL role
+  commissionRate Float? // only for SPECIAL role
 
   leaderId String?
   leader   User?   @relation("LeaderToDownline", fields: [leaderId], references: [id])
@@ -144,9 +144,9 @@ model Presentation {
   step           Int     @default(1)
   videoCompleted Boolean @default(false)
 
-  unitType    UnitType?
-  weekOfYear  Int?
-  paymentPlan PaymentPlan?
+  unitType       UnitType?
+  weekOfYear     Int?
+  paymentPlan    PaymentPlan?
   basePriceCents Int?
 
   // ✅ OPPOSITE for Contract.presentation
@@ -163,8 +163,8 @@ model Commission {
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  level       Int
-  rate        Float // payout delta rate e.g. 0.16 / 0.02
+  level           Int
+  rate            Float // payout delta rate e.g. 0.16 / 0.02
   baseAmountCents Int
 
   status CommissionStatus @default(PENDING)
@@ -174,16 +174,16 @@ model Commission {
 }
 
 model CommissionConfig {
-  id         String   @id @default(cuid())
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(cuid())
+  updatedAt DateTime @updatedAt
 
-  rmRate     Float    @default(0.225)
-  rlRate     Float    @default(0.20)
-  adminRate  Float    @default(0.26)
-  agencyRate Float    @default(0.20)
-  lvl3Rate   Float    @default(0.15)
-  lvl2Rate   Float    @default(0.125)
-  lvl1Rate   Float    @default(0.10)
+  rmRate     Float @default(0.225)
+  rlRate     Float @default(0.20)
+  adminRate  Float @default(0.26)
+  agencyRate Float @default(0.20)
+  lvl3Rate   Float @default(0.15)
+  lvl2Rate   Float @default(0.125)
+  lvl1Rate   Float @default(0.10)
 }
 
 enum CommissionStatus {
@@ -216,9 +216,9 @@ model Contract {
   manager   User?   @relation("ManagerContracts", fields: [managerId], references: [id])
 
   // pricing snapshot
-  unitType    UnitType
-  weekOfYear  Int
-  paymentPlan PaymentPlan
+  unitType       UnitType
+  weekOfYear     Int
+  paymentPlan    PaymentPlan
   basePriceCents Int
 
   // OTP
@@ -244,12 +244,12 @@ model Contract {
 }
 
 model CustomPaymentPlan {
-  id         String   @id @default(cuid())
-  contractId String   @unique
-  contract   Contract @relation(fields: [contractId], references: [id])
+  id             String   @id @default(cuid())
+  contractId     String   @unique
+  contract       Contract @relation(fields: [contractId], references: [id])
   baseTotalCents Int
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   installments CustomPaymentInstallment[]
 
@@ -257,17 +257,17 @@ model CustomPaymentPlan {
 }
 
 model CustomPaymentInstallment {
-  id          String            @id @default(cuid())
-  planId      String
-  plan        CustomPaymentPlan @relation(fields: [planId], references: [id])
-  dueDate     DateTime
+  id              String            @id @default(cuid())
+  planId          String
+  plan            CustomPaymentPlan @relation(fields: [planId], references: [id])
+  dueDate         DateTime
   baseAmountCents Int
   paidAmountCents Int               @default(0)
-  label       String?
-  isPaid      Boolean           @default(false)
-  paidAt      DateTime?
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  label           String?
+  isPaid          Boolean           @default(false)
+  paidAt          DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
 
   posAllocations PosAllocation[]
 
@@ -336,8 +336,8 @@ model PricingWeek {
 
 model ExchangeRate {
   id           String   @id @default(cuid())
-  fromCurrency String   // base: "EUR"
-  toCurrency   String   // "EUR" | "GBP" | "USD" | "TRY"
+  fromCurrency String // base: "EUR"
+  toCurrency   String // "EUR" | "GBP" | "USD" | "TRY"
   rate         Decimal  @db.Decimal(18, 6)
   updatedAt    DateTime @updatedAt
 
@@ -355,6 +355,18 @@ enum PosTransactionStatus {
   PENDING
   SUCCESS
   FAILED
+}
+
+enum BankMessageService {
+  MPI_ENROLLMENT // 3D kayıt sorgusu (VERes)
+  VPOS_PAYMENT // Provizyon/tahsilat
+  THREE_D_CALLBACK // ACS/MPI'ın bize POST ettiği sonuç
+}
+
+enum BankMessageOutcome {
+  SUCCESS // Banka olumlu yanıt verdi
+  DECLINED // Banka yanıt verdi, işlemi reddetti
+  ERROR // Bağlantı/zaman aşımı/parse hatası — iş sonucu alınamadı
 }
 
 model OtpCode {
@@ -429,23 +441,23 @@ enum NotificationType {
 }
 
 model Notification {
-  id         String           @id @default(cuid())
-  createdAt  DateTime         @default(now())
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
 
-  type       NotificationType
-  title      String
-  body       String
+  type  NotificationType
+  title String
+  body  String
 
-  actorId    String
-  actor      User             @relation("NotificationActor", fields: [actorId], references: [id])
+  actorId String
+  actor   User   @relation("NotificationActor", fields: [actorId], references: [id])
 
   recipientId String?
-  recipient   User?            @relation("NotificationRecipient", fields: [recipientId], references: [id])
+  recipient   User?   @relation("NotificationRecipient", fields: [recipientId], references: [id])
 
   entityId   String?
   entityType String?
 
-  reads      NotificationRead[]
+  reads NotificationRead[]
 
   @@index([actorId])
   @@index([recipientId])
@@ -453,14 +465,14 @@ model Notification {
 }
 
 model NotificationRead {
-  id             String       @id @default(cuid())
-  readAt         DateTime     @default(now())
+  id     String   @id @default(cuid())
+  readAt DateTime @default(now())
 
   notificationId String
   notification   Notification @relation(fields: [notificationId], references: [id])
 
-  userId         String
-  user           User         @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
   @@unique([notificationId, userId])
   @@index([userId])
@@ -479,31 +491,31 @@ model Apartment {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  status      ApartmentStatus @default(AVAILABLE)
-  address     String
-  latitude    Float?
-  longitude   Float?
-  sqft        Float
-  priceUsd    Float
+  status    ApartmentStatus @default(AVAILABLE)
+  address   String
+  latitude  Float?
+  longitude Float?
+  sqft      Float
+  priceUsd  Float
 
   title       String?
   description String?
   floor       Int?
   roomCount   Int?
 
-  images      ApartmentImage[]
+  images ApartmentImage[]
 }
 
 model ApartmentImage {
-  id          String    @id @default(cuid())
-  createdAt   DateTime  @default(now())
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
 
   apartmentId String
   apartment   Apartment @relation(fields: [apartmentId], references: [id], onDelete: Cascade)
 
-  url         String
-  isCover     Boolean   @default(false)
-  order       Int       @default(0)
+  url     String
+  isCover Boolean @default(false)
+  order   Int     @default(0)
 
   @@index([apartmentId])
   @@map("apartment_images")
@@ -558,30 +570,68 @@ model PosTransaction {
   updatedAt      DateTime             @updatedAt
 
   // Ziraat 3D Secure alanları
-  mpiTransactionId String?   // VerifyEnrollmentRequestId (bizim UUID'imiz)
-  eci              String?   // 05=full 3D, 06=half VISA, 02=half MC
-  cavv             String?   // CAVV from MPI
-  mdStatus         String?   // 1=Full 3D, 2/3/4=Half, 0/7/8/9=Enrolled değil
-  paresStatus      String?   // Y, A, N, U
-  cardBin          String?   // İlk 6 hane (gösterim için)
-  cardLast4        String?   // Son 4 hane (gösterim için)
-  vposReference    String?   // Banka referans no (HostReference)
-  cardToken        String?   // Geçici şifreli kart verisi (PAN+Expiry) — VPos sonrası silinir
+  mpiTransactionId String? // VerifyEnrollmentRequestId (bizim UUID'imiz)
+  eci              String? // 05=full 3D, 06=half VISA, 02=half MC
+  cavv             String? // CAVV from MPI
+  mdStatus         String? // 1=Full 3D, 2/3/4=Half, 0/7/8/9=Enrolled değil
+  paresStatus      String? // Y, A, N, U
+  cardBin          String? // İlk 6 hane (gösterim için)
+  cardLast4        String? // Son 4 hane (gösterim için)
+  vposReference    String? // Banka referans no (HostReference)
+  cardToken        String? // Geçici şifreli kart verisi (PAN+Expiry) — VPos sonrası silinir
 
   // TL karşılığı tahsilat: fiyatlar EUR, banka terminali 949 (TL) kabul ettiği için
   // tahsilat anındaki kurla TL'ye çevrilip bankaya TL tutar gönderilir.
   // amountCents EUR cinsinden kalır; banka mutabakatı bu alanlarla yapılır.
-  chargedCurrency    String?   // Bankaya gönderilen para birimi ("TRY")
-  chargedAmountCents Int?      // Bankadan çekilen tutar (kuruş)
+  chargedCurrency    String? // Bankaya gönderilen para birimi ("TRY")
+  chargedAmountCents Int? // Bankadan çekilen tutar (kuruş)
   fxRate             Decimal?  @db.Decimal(12, 6) // 1 EUR = fxRate TRY
-  fxRateSource       String?   // ör. TCMB_FOREX_SELLING
+  fxRateSource       String? // ör. TCMB_FOREX_SELLING
   fxRateAt           DateTime? // Kurun çekildiği an
 
-  allocations    PosAllocation[]
+  allocations  PosAllocation[]
+  bankMessages BankMessageLog[]
 
   @@index([contractId])
   @@index([mpiTransactionId])
   @@map("pos_transactions")
+}
+
+/// Bankayla yapılan her mesajlaşmanın kalıcı kaydı — mutabakat/uyuşmazlık kanıtı.
+/// Gövdeler MASKELENMİŞ olarak saklanır (bkz. bank-message.mask.ts): PAN yalnızca
+/// ilk6+son4, CVV ve üye işyeri şifresi hiç saklanmaz. Satırlar append-only'dir;
+/// güncellenmez, yalnızca saklama süresi dolunca temizlenir.
+model BankMessageLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  service BankMessageService
+  outcome BankMessageOutcome
+
+  // Korelasyon — işlem silinse bile kayıt kanıt olarak kalır (SetNull)
+  posTransactionId String?
+  posTransaction   PosTransaction? @relation(fields: [posTransactionId], references: [id], onDelete: SetNull)
+  mpiTransactionId String?
+  contractId       String?
+
+  endpoint   String
+  httpStatus Int?
+  durationMs Int?
+
+  requestBody  String  @db.Text
+  responseBody String? @db.Text
+
+  // Bankanın iş sonucu — ham gövdeyi ayrıştırmadan sorgulayabilmek için
+  resultCode    String?
+  resultText    String?
+  hostReference String?
+  errorMessage  String?
+
+  @@index([posTransactionId])
+  @@index([mpiTransactionId])
+  @@index([createdAt])
+  @@index([hostReference])
+  @@map("bank_message_logs")
 }
 
 model PosAllocation {

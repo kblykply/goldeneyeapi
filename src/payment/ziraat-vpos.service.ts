@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { VposParams, VposResult } from './payment.types';
 import { centsToDecimalString, formatExpiryForVpos, buildXmlBody, parseXmlResponse } from './payment.utils';
+import { BankMessageLogService } from './bank-message-log.service';
 
 @Injectable()
 export class ZiraatVposService {
@@ -13,7 +14,10 @@ export class ZiraatVposService {
   private readonly vposUrl: string;
   private readonly currencyCode: string;
 
-  constructor(private config: ConfigService) {
+  constructor(
+    private config: ConfigService,
+    private bankLog: BankMessageLogService,
+  ) {
     this.merchantId = this.config.getOrThrow('ZIRAAT_MERCHANT_ID');
     this.merchantPassword = this.config.getOrThrow('ZIRAAT_MERCHANT_PASSWORD');
     this.terminalNo = this.config.getOrThrow('ZIRAAT_TERMINAL_NO');
@@ -53,7 +57,19 @@ export class ZiraatVposService {
     if (params.cvv) fields.Cvv = params.cvv;
     const xmlBody = buildXmlBody('VposRequest', fields);
 
+    // Gövde maskelenerek saklanır (bank-message.mask.ts); ham hali DB'ye gitmez
+    const logBase = {
+      service: 'VPOS_PAYMENT' as const,
+      endpoint: this.vposUrl,
+      requestBody: xmlBody,
+      posTransactionId: params.posTransactionId,
+      mpiTransactionId: params.mpiTransactionId,
+      contractId: params.contractId,
+    };
+    const startedAt = Date.now();
+
     let xmlText: string;
+    let httpStatus: number | undefined;
     try {
       const res = await fetch(this.vposUrl, {
         method: 'POST',
@@ -61,32 +77,63 @@ export class ZiraatVposService {
         body: new URLSearchParams({ prmstr: xmlBody }).toString(),
         signal: AbortSignal.timeout(15_000),
       });
+      httpStatus = res.status;
       xmlText = await res.text();
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error('VPos HTTP error', err);
+      await this.bankLog.record({
+        ...logBase,
+        outcome: 'ERROR',
+        durationMs: Date.now() - startedAt,
+        resultCode: 'TIMEOUT',
+        errorMessage: err?.message ?? 'VPos bağlantı hatası',
+      });
       return { approved: false, responseCode: 'TIMEOUT', responseText: 'VPos bağlantı hatası.' };
     }
 
-    this.logger.debug('VPos response', xmlText);
+    const durationMs = Date.now() - startedAt;
+    const failed = async (resultCode: string, errorMessage: string): Promise<VposResult> => {
+      await this.bankLog.record({
+        ...logBase,
+        outcome: 'ERROR',
+        durationMs,
+        httpStatus,
+        responseBody: xmlText,
+        resultCode,
+        errorMessage,
+      });
+      return { approved: false, responseCode: resultCode, responseText: 'VPos geçersiz yanıt.' };
+    };
 
     let parsed: Record<string, any>;
     try {
       parsed = parseXmlResponse(xmlText);
     } catch {
-      this.logger.error('VPos XML parse error', xmlText);
-      return { approved: false, responseCode: 'PARSE_ERROR', responseText: 'VPos geçersiz yanıt.' };
+      this.logger.error('VPos XML parse error');
+      return failed('PARSE_ERROR', 'VPos yanıtı ayrıştırılamadı');
     }
 
     const vposRes = parsed?.VposResponse as Record<string, any> | undefined;
     if (!vposRes) {
-      this.logger.error('VPos: VposResponse missing', xmlText);
-      return { approved: false, responseCode: 'INVALID', responseText: 'VPos geçersiz yanıt.' };
+      this.logger.error('VPos: VposResponse missing');
+      return failed('INVALID', 'VposResponse alanı yanıtta yok');
     }
 
     const responseCode = String(vposRes.ResultCode ?? vposRes.resultCode ?? '');
     const responseText = String(vposRes.ResultDetail ?? vposRes.resultDetail ?? '');
     const hostReference = String(vposRes.HostReference ?? vposRes.hostReference ?? '');
     const approved = responseCode === '0000';
+
+    await this.bankLog.record({
+      ...logBase,
+      outcome: approved ? 'SUCCESS' : 'DECLINED',
+      durationMs,
+      httpStatus,
+      responseBody: xmlText,
+      resultCode: responseCode,
+      resultText: responseText,
+      hostReference: hostReference || undefined,
+    });
 
     return { approved, responseCode, responseText, hostReference };
   }
