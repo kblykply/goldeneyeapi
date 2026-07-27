@@ -17,6 +17,7 @@ import { TeamService } from "../team/team.service";
 import { SkipAuth } from "../auth/skip-auth.decorator";
 import { ZiraatMpiService } from "../payment/ziraat-mpi.service";
 import { ZiraatVposService } from "../payment/ziraat-vpos.service";
+import { ExchangeRateService, type EurTryQuote } from "../payment/exchange-rate.service";
 import {
   calculateMpiHash,
   centsToDecimalString,
@@ -25,6 +26,54 @@ import {
   decryptCardToken,
   detectBrand,
 } from "../payment/payment.utils";
+import { verifyPortalToken, getPortalSecret } from "./portal-token.utils";
+
+// verify-otp ve token-login'in ortak sözleşme seçimi
+const PORTAL_CONTRACT_SELECT = {
+  id: true,
+  unitType: true,
+  weekOfYear: true,
+  paymentPlan: true,
+  basePriceCents: true,
+  customPaymentPlan: {
+    select: {
+      baseTotalCents: true,
+      installments: {
+        select: {
+          id: true,
+          label: true,
+          dueDate: true,
+          baseAmountCents: true,
+          paidAmountCents: true,
+          isPaid: true,
+          paidAt: true,
+        },
+        orderBy: { dueDate: "asc" as const },
+      },
+    },
+  },
+} as const;
+
+function mapPortalContracts<
+  T extends {
+    customPaymentPlan: {
+      installments: Array<{ baseAmountCents: number; paidAmountCents: number }>;
+    } | null;
+  },
+>(contracts: T[]) {
+  return contracts.map((c) => ({
+    ...c,
+    customPaymentPlan: c.customPaymentPlan
+      ? {
+          ...c.customPaymentPlan,
+          installments: c.customPaymentPlan.installments.map((inst) => ({
+            ...inst,
+            remainingAmountCents: inst.baseAmountCents - inst.paidAmountCents,
+          })),
+        }
+      : null,
+  }));
+}
 
 // PARes Status (Y/A/N/U) → numeric mdStatus (doküman bölüm 5.8 hash parametreleri)
 const PARES_TO_MD_STATUS: Record<string, string> = { Y: "1", A: "4", U: "9", N: "0" };
@@ -40,6 +89,11 @@ class VerifyOtpDto {
 
   @IsString()
   otp: string;
+}
+
+class TokenLoginDto {
+  @IsString()
+  token: string;
 }
 
 class InitiatePaymentDto {
@@ -70,21 +124,13 @@ class PaymentCallbackDto {
   status: "SUCCESS" | "FAILED";
 }
 
-class Payment3dInitDto {
-  @IsString()
-  phoneE164: string;
-
-  @IsString()
-  contractId: string;
-
-  @IsArray()
-  @ArrayNotEmpty()
-  @IsString({ each: true })
-  installmentIds: string[];
-
+class Payment3dInitDto extends InitiatePaymentDto {
+  // Müşteriye quote'ta gösterilen TL tutar (kuruş). Sunucu kendi hesabıyla
+  // birebir karşılaştırır; kur değiştiyse işlem reddedilir — müşteriden
+  // onayladığından farklı bir tutar asla çekilmez. Finansal hesapta kullanılmaz.
   @IsInt()
   @Min(1)
-  amountCents: number;
+  quotedTryCents: number;
 
   @IsString()
   cardNumber: string;
@@ -135,6 +181,7 @@ export class CustomerPortalController {
     private team: TeamService,
     private mpi: ZiraatMpiService,
     private vpos: ZiraatVposService,
+    private fx: ExchangeRateService,
     private config: ConfigService,
   ) {
     this.cardSecret = this.config.getOrThrow("CARD_TOKEN_SECRET");
@@ -181,30 +228,7 @@ export class CustomerPortalController {
         phoneE164: true,
         contracts: {
           where: { status: "APPROVED" },
-          select: {
-            id: true,
-            unitType: true,
-            weekOfYear: true,
-            paymentPlan: true,
-            basePriceCents: true,
-            customPaymentPlan: {
-              select: {
-                baseTotalCents: true,
-                installments: {
-                  select: {
-                    id: true,
-                    label: true,
-                    dueDate: true,
-                    baseAmountCents: true,
-                    paidAmountCents: true,
-                    isPaid: true,
-                    paidAt: true,
-                  },
-                  orderBy: { dueDate: "asc" },
-                },
-              },
-            },
-          },
+          select: PORTAL_CONTRACT_SELECT,
         },
       },
     });
@@ -218,23 +242,51 @@ export class CustomerPortalController {
       meta: { phoneE164: body.phoneE164, contractCount: customer.contracts.length },
     });
 
-    const contracts = customer.contracts.map((c) => ({
-      ...c,
-      customPaymentPlan: c.customPaymentPlan
-        ? {
-            ...c.customPaymentPlan,
-            installments: c.customPaymentPlan.installments.map((inst) => ({
-              ...inst,
-              remainingAmountCents: inst.baseAmountCents - inst.paidAmountCents,
-            })),
-          }
-        : null,
-    }));
+    return {
+      ok: true,
+      customer: { fullName: customer.fullName, phoneE164: customer.phoneE164 },
+      contracts: mapPortalContracts(customer.contracts),
+    };
+  }
+
+  // Sunum sonunda satışçının ürettiği kısa ömürlü linkle OTP'siz giriş.
+  // Token'daki sözleşme henüz APPROVED olmasa da listelenir; ödeme yine
+  // validateContractForPayment'taki APPROVED şartına takılır.
+  @Post("token-login")
+  async tokenLogin(@Body() body: TokenLoginDto) {
+    const payload = verifyPortalToken(body.token, getPortalSecret(this.config));
+
+    if (!payload) {
+      return { ok: false, message: "Bağlantının süresi dolmuş. Lütfen telefon numaranızla giriş yapın." };
+    }
+
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: payload.customerId },
+      select: {
+        id: true,
+        fullName: true,
+        phoneE164: true,
+        contracts: {
+          where: { OR: [{ status: "APPROVED" }, { id: payload.contractId }] },
+          select: PORTAL_CONTRACT_SELECT,
+        },
+      },
+    });
+
+    if (!customer) return { ok: false, message: "Müşteri bulunamadı." };
+
+    await this.audit.log({
+      action: "CUSTOMER_PORTAL_TOKEN_LOGIN",
+      entityType: "CUSTOMER",
+      entityId: customer.id,
+      contractId: payload.contractId,
+      meta: { phoneE164: customer.phoneE164, contractCount: customer.contracts.length },
+    });
 
     return {
       ok: true,
       customer: { fullName: customer.fullName, phoneE164: customer.phoneE164 },
-      contracts,
+      contracts: mapPortalContracts(customer.contracts),
     };
   }
 
@@ -315,15 +367,36 @@ export class CustomerPortalController {
 
   // ─── 3D Secure ───────────────────────────────────────────────────────────────
 
+  // Kart formu açılmadan önce çağrılır: seçilen taksitlerin EUR toplamının o anki
+  // kurla TL karşılığını döner. Müşteriye "kartınızdan bu kadar TL çekilecektir"
+  // bu yanıtla gösterilir; 3d-init aynı kur cache'ini kullandığından tutarlar
+  // birebir eşleşir (TTL içinde). Kur alınamazsa ödeme başlatılmaz.
+  @Post("payment-quote")
+  async paymentQuote(@Body() body: InitiatePaymentDto) {
+    const quoted = await this.validateAndQuoteTry(body);
+    if (!quoted.ok) return quoted;
+    return { ok: true, ...quoted.quote };
+  }
+
   @Post("payment-3d-init")
   async payment3dInit(@Body() body: Payment3dInitDto, @Req() req: any) {
-    const validation = await this.validateContractForPayment(
-      body.contractId,
-      body.phoneE164,
-      body.installmentIds,
-      body.amountCents,
-    );
-    if (!validation.ok) return validation;
+    // Kur sunucuda çekilir ve işlem kaydına kilitlenir; bankaya giden tutar
+    // her adımda (MPI, VPos, callback doğrulaması) bu kilitli TL değerdir.
+    const quoted = await this.validateAndQuoteTry(body);
+    if (!quoted.ok) return quoted;
+    const chargedTryCents = quoted.quote.amountTryCents;
+
+    // Müşterinin ekranda onayladığı TL tutar sunucu hesabıyla birebir aynı olmalı;
+    // kur bu arada değiştiyse farklı tutar çekmek yerine işlem reddedilir.
+    // Güncel teklif yanıtta döner; client yeni bir quote isteği atmadan gösterir.
+    if (body.quotedTryCents !== chargedTryCents) {
+      return {
+        ok: false,
+        code: "QUOTE_EXPIRED",
+        message: "Kur güncellendi. Lütfen tutarı yeniden onaylayın.",
+        ...quoted.quote,
+      };
+    }
 
     const cardNumber = body.cardNumber.replace(/\s/g, "");
     const mpiTransactionId = randomUUID().replace(/-/g, "");
@@ -331,6 +404,16 @@ export class CustomerPortalController {
 
     // Kart verisi geçici olarak şifrelenmiş token'da tutulur; işlem sonrası temizlenir
     const cardToken = encryptCardToken(cardNumber, body.cardExpiry, this.cardSecret, body.cardCvv);
+
+    // İşlem kaydına ve audit'e birebir aynı kur alanları yazılır;
+    // para birimi etiketi bankaya giden koddan (ZIRAAT_CURRENCY_CODE) türetilir
+    const fxFields = {
+      chargedCurrency: this.vpos.getCurrencyAlpha(),
+      chargedAmountCents: chargedTryCents,
+      fxRate: quoted.quote.rate,
+      fxRateSource: quoted.quote.rateSource,
+      fxRateAt: quoted.quote.rateAt,
+    };
 
     const transaction = await this.prisma.posTransaction.create({
       data: {
@@ -342,6 +425,7 @@ export class CustomerPortalController {
         cardBin: cardNumber.substring(0, 6),
         cardLast4: cardNumber.slice(-4),
         cardToken,
+        ...fxFields,
       },
       select: { id: true },
     });
@@ -353,6 +437,7 @@ export class CustomerPortalController {
       contractId: body.contractId,
       meta: {
         amountCents: body.amountCents,
+        ...fxFields,
         installmentIds: body.installmentIds,
         cardBin: cardNumber.substring(0, 6),
         cardLast4: cardNumber.slice(-4),
@@ -362,7 +447,7 @@ export class CustomerPortalController {
     const enrollment = await this.mpi.checkEnrollment({
       pan: cardNumber,
       expiryYYMM: body.cardExpiry,
-      amountCents: body.amountCents,
+      amountCents: chargedTryCents,
       mpiTransactionId,
       cardholderName: body.cardholderName,
       locale: body.locale,
@@ -379,7 +464,7 @@ export class CustomerPortalController {
       const vposResult = await this.vpos.processPayment({
         pan: cardNumber,
         expiryYYMM: body.cardExpiry,
-        amountCents: body.amountCents,
+        amountCents: chargedTryCents,
         cvv: body.cardCvv,
         eci,
         cavv: "",
@@ -434,7 +519,7 @@ export class CustomerPortalController {
 
     const transaction = await this.prisma.posTransaction.findFirst({
       where: { mpiTransactionId: transactionId },
-      select: { id: true, amountCents: true, installmentIds: true, status: true, contractId: true, mpiTransactionId: true, cardToken: true },
+      select: { id: true, amountCents: true, chargedAmountCents: true, installmentIds: true, status: true, contractId: true, mpiTransactionId: true, cardToken: true },
     });
 
     if (!transaction) return redirectFail("NOT_FOUND");
@@ -460,17 +545,19 @@ export class CustomerPortalController {
       rawBody.PurchAmount ?? rawBody.PurchaseAmount ?? rawBody.purchaseAmount;
     const echoedCurrency: string | undefined =
       rawBody.PurchCurrency ?? rawBody.Currency ?? rawBody.currency;
-    const expectedAmount = centsToDecimalString(transaction.amountCents);
+    // Bankaya giden tutar TL (chargedAmountCents); eski/geçiş kayıtları için amountCents'e düşülür
+    const bankAmountCents = transaction.chargedAmountCents ?? transaction.amountCents;
+    const expectedAmount = centsToDecimalString(bankAmountCents);
 
     // Tutar bütünlüğü hash'ten bağımsız da doğrulanır.
     // Not: bazı ACS/MPI sürümleri tutarı TR locale ("1.234,56") ya da küçük birim tam
     // sayı ("10000") formatında echo'layabilir; amountMatchesExpected bu varyantları dener.
-    if (echoedAmount && !amountMatchesExpected(echoedAmount, transaction.amountCents)) {
+    if (echoedAmount && !amountMatchesExpected(echoedAmount, bankAmountCents)) {
       const sanitized = Object.fromEntries(
         Object.entries(rawBody).map(([k, v]) => (/pan|card/i.test(k) ? [k, "***"] : [k, v])),
       );
       this.logger.warn(
-        `3D callback amount mismatch. echoed=${echoedAmount} expected=${expectedAmount} amountCents=${transaction.amountCents} transactionId=${transaction.id} body=${JSON.stringify(sanitized)}`,
+        `3D callback amount mismatch. echoed=${echoedAmount} expected=${expectedAmount} bankAmountCents=${bankAmountCents} transactionId=${transaction.id} body=${JSON.stringify(sanitized)}`,
       );
       await this.prisma.posTransaction.update({
         where: { id: transaction.id },
@@ -555,7 +642,7 @@ export class CustomerPortalController {
     const vposResult = await this.vpos.processPayment({
       pan,
       expiryYYMM,
-      amountCents: transaction.amountCents,
+      amountCents: bankAmountCents,
       cvv,
       eci,
       cavv: vposCavv,
@@ -590,6 +677,24 @@ export class CustomerPortalController {
     return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket?.remoteAddress ?? "0.0.0.0";
   }
 
+  // quote ve 3d-init'in ortak ön adımı: sözleşme doğrulaması ve kur çekimi
+  // birbirinden bağımsız olduğundan paralel yürütülür. Kur alınamazsa ödeme
+  // başlatılmaz — asla tahmini/varsayılan kurla tahsilat yapılmaz.
+  private async validateAndQuoteTry(
+    body: InitiatePaymentDto,
+  ): Promise<{ ok: false; message: string } | { ok: true; quote: EurTryQuote }> {
+    const [validation, quote] = await Promise.all([
+      this.validateContractForPayment(body.contractId, body.phoneE164, body.installmentIds, body.amountCents),
+      this.fx.quoteEurCents(body.amountCents),
+    ]);
+    if (!validation.ok) return validation;
+    if (!quote) {
+      return { ok: false, message: "Güncel kur bilgisi alınamadı. Lütfen kısa süre sonra tekrar deneyin." };
+    }
+
+    return { ok: true, quote };
+  }
+
   private async validateContractForPayment(
     contractId: string,
     phoneE164: string,
@@ -606,7 +711,13 @@ export class CustomerPortalController {
         customer: { select: { phoneE164: true } },
         customPaymentPlan: {
           select: {
-            installments: { select: { id: true, baseAmountCents: true, paidAmountCents: true } },
+            // Yalnızca ödenmek istenen taksitler çekilir; uzun planlarda tüm
+            // satırları taşımaya gerek yok. Plan dışı bir id zaten eşleşmez ve
+            // aşağıdaki uzunluk kontrolüne takılır.
+            installments: {
+              where: { id: { in: installmentIds } },
+              select: { id: true, baseAmountCents: true, paidAmountCents: true },
+            },
           },
         },
       },
@@ -616,13 +727,9 @@ export class CustomerPortalController {
     if (contract.customer.phoneE164 !== phoneE164) return { ok: false, message: "Yetkisiz işlem." };
     if (contract.status !== "APPROVED") return { ok: false, message: "Sözleşme ödenebilir durumda değil." };
 
-    const planInstallments = contract.customPaymentPlan?.installments ?? [];
-    const installmentMap = new Map(planInstallments.map((i) => [i.id, i]));
-    const selectedInstallments = installmentIds
-      .map((id) => installmentMap.get(id))
-      .filter(Boolean) as Array<{ id: string; baseAmountCents: number; paidAmountCents: number }>;
+    const selectedInstallments = contract.customPaymentPlan?.installments ?? [];
 
-    if (selectedInstallments.length !== installmentIds.length) {
+    if (selectedInstallments.length !== new Set(installmentIds).size) {
       return { ok: false, message: "Geçersiz taksit seçimi." };
     }
 

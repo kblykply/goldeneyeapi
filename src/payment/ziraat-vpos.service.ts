@@ -21,6 +21,18 @@ export class ZiraatVposService {
     this.currencyCode = this.config.get('ZIRAAT_CURRENCY_CODE', '949');
   }
 
+  // İşlem kayıtlarındaki para birimi etiketi bankaya giden sayısal koddan türetilir;
+  // terminal para birimi env'den değişirse kayıtlar otomatik doğru etiketlenir.
+  private static readonly CURRENCY_ALPHA: Record<string, string> = {
+    '949': 'TRY',
+    '978': 'EUR',
+    '840': 'USD',
+  };
+
+  getCurrencyAlpha(): string {
+    return ZiraatVposService.CURRENCY_ALPHA[this.currencyCode] ?? this.currencyCode;
+  }
+
   async processPayment(params: VposParams): Promise<VposResult> {
     const fields: Record<string, string> = {
       MerchantId: this.merchantId,

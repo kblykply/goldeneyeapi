@@ -15,6 +15,9 @@ import { PricingService } from "../pricing/pricing.service";
 import { ConfigService } from "@nestjs/config";
 import { createClient } from "@supabase/supabase-js";
 import { DEFAULT_CUSTOMER_NAME } from "../customers/customer.constants";
+import { createPortalToken, getPortalSecret } from "../customer-portal/portal-token.utils";
+
+const PORTAL_LINK_TTL_MS = 30 * 60 * 1000;
 
 const PLAN_LABELS: Record<string, string> = {
   PESIN: "Peşin",
@@ -187,6 +190,47 @@ export class ContractsController {
     });
 
     return { ok: true, contractId: c.id };
+  }
+
+  /**
+   * Sunum sonunda ödeme takip sayfasını OTP'siz açan kısa ömürlü link üretir
+   * POST /contracts/:id/portal-link
+   */
+  @Post(":id/portal-link")
+  async createPortalLink(
+    @Param("id") id: string,
+    @Req() req: Request & { user: AuthedUser }
+  ) {
+    const me = req.user;
+
+    const c = await this.prisma.contract.findUnique({
+      where: { id },
+      select: { id: true, customerId: true, salespersonId: true },
+    });
+
+    if (!c || c.salespersonId !== me.id) {
+      return { ok: false, message: "Sözleşme bulunamadı" };
+    }
+
+    const token = createPortalToken(
+      { customerId: c.customerId, contractId: c.id, expiresAt: Date.now() + PORTAL_LINK_TTL_MS },
+      getPortalSecret(this.config)
+    );
+
+    const frontendUrl = this.config.get("FRONTEND_URL", "");
+    // Prefix'siz link: sitenin middleware'i ziyaretçinin dilini tespit edip
+    // query'yi koruyarak /{locale}/payment-tracking'e yönlendirir
+    const url = `${frontendUrl}/payment-tracking?token=${encodeURIComponent(token)}`;
+
+    await this.audit.log({
+      action: "CUSTOMER_PORTAL_LINK_CREATED",
+      entityType: "CONTRACT",
+      entityId: c.id,
+      contractId: c.id,
+      meta: { customerId: c.customerId, ttlMs: PORTAL_LINK_TTL_MS },
+    });
+
+    return { ok: true, url };
   }
 
   /**

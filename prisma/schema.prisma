@@ -568,6 +568,15 @@ model PosTransaction {
   vposReference    String?   // Banka referans no (HostReference)
   cardToken        String?   // Geçici şifreli kart verisi (PAN+Expiry) — VPos sonrası silinir
 
+  // TL karşılığı tahsilat: fiyatlar EUR, banka terminali 949 (TL) kabul ettiği için
+  // tahsilat anındaki kurla TL'ye çevrilip bankaya TL tutar gönderilir.
+  // amountCents EUR cinsinden kalır; banka mutabakatı bu alanlarla yapılır.
+  chargedCurrency    String?   // Bankaya gönderilen para birimi ("TRY")
+  chargedAmountCents Int?      // Bankadan çekilen tutar (kuruş)
+  fxRate             Decimal?  @db.Decimal(12, 6) // 1 EUR = fxRate TRY
+  fxRateSource       String?   // ör. TCMB_FOREX_SELLING
+  fxRateAt           DateTime? // Kurun çekildiği an
+
   allocations    PosAllocation[]
 
   @@index([contractId])
