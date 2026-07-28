@@ -296,7 +296,7 @@ export class ContractsController {
 
   private buildPortalUrl(customerId: string, contractId: string, ttlMs: number): string {
     const token = createPortalToken(
-      { customerId, contractId, expiresAt: Date.now() + ttlMs },
+      { customerId, contractId, purpose: "LINK", expiresAt: Date.now() + ttlMs },
       getPortalSecret(this.config)
     );
 

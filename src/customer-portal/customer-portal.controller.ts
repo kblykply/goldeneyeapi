@@ -9,6 +9,7 @@ import {
   IsOptional,
 } from "class-validator";
 import { randomUUID } from "crypto";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { OtpService } from "../otp/otp.service";
 import { AuditService } from "../audit/audit.service";
@@ -27,11 +28,16 @@ import {
   decryptCardToken,
   detectBrand,
 } from "../payment/payment.utils";
-import { verifyPortalToken, getPortalSecret } from "./portal-token.utils";
+import { CommissionService } from "../commissions/commission.service";
+import { verifyPortalToken, createPortalToken, getPortalSecret } from "./portal-token.utils";
+
+// Oturum token'ı ömrü — sitedeki sessionStorage TTL'i (30 dk) ile aynı tutulur
+const PORTAL_SESSION_TTL_MS = 30 * 60 * 1000;
 
 // verify-otp ve token-login'in ortak sözleşme seçimi
 const PORTAL_CONTRACT_SELECT = {
   id: true,
+  status: true,
   unitType: true,
   weekOfYear: true,
   paymentPlan: true,
@@ -55,6 +61,11 @@ const PORTAL_CONTRACT_SELECT = {
   },
 } as const;
 
+// "Bu taksitten ne kadar borç kaldı" — portalın müşteriye gönderdiği
+// remainingAmountCents ile tahsilat doğrulaması aynı tanımı kullanır
+const remainingCents = (i: { baseAmountCents: number; paidAmountCents: number }) =>
+  i.baseAmountCents - i.paidAmountCents;
+
 function mapPortalContracts<
   T extends {
     customPaymentPlan: {
@@ -69,7 +80,7 @@ function mapPortalContracts<
           ...c.customPaymentPlan,
           installments: c.customPaymentPlan.installments.map((inst) => ({
             ...inst,
-            remainingAmountCents: inst.baseAmountCents - inst.paidAmountCents,
+            remainingAmountCents: remainingCents(inst),
           })),
         }
       : null,
@@ -91,6 +102,7 @@ type CustomerErrorCode =
   | "ALREADY_PROCESSED"      // İşlem daha önce sonuçlanmış
   | "RATE_UNAVAILABLE"       // Güncel kur alınamadı
   | "QUOTE_EXPIRED"          // Kur teklifi eskidi
+  | "STALE_SELECTION"        // Ekrandaki taksit listesi güncel değil
   | "CONTRACT_INVALID";      // Sözleşme/taksit seçimi ödemeye uygun değil
 
 class RequestOtpDto {
@@ -106,7 +118,8 @@ class VerifyOtpDto {
   otp: string;
 }
 
-class TokenLoginDto {
+// token-login ve contracts uçlarının ortak gövdesi
+class PortalTokenDto {
   @IsString()
   token: string;
 }
@@ -198,6 +211,7 @@ export class CustomerPortalController {
     private vpos: ZiraatVposService,
     private fx: ExchangeRateService,
     private bankLog: BankMessageLogService,
+    private commissions: CommissionService,
     private config: ConfigService,
   ) {
     this.cardSecret = this.config.getOrThrow("CARD_TOKEN_SECRET");
@@ -236,74 +250,58 @@ export class CustomerPortalController {
 
     if (!result.ok) return { ok: false, message: result.message };
 
-    const customer = await this.prisma.customer.findUnique({
-      where: { phoneE164: body.phoneE164 },
-      select: {
-        id: true,
-        fullName: true,
-        phoneE164: true,
-        contracts: {
-          where: { status: "APPROVED" },
-          select: PORTAL_CONTRACT_SELECT,
-        },
-      },
-    });
-
-    if (!customer) return { ok: false, message: "Müşteri bulunamadı." };
+    const loaded = await this.loadPortalCustomer({ phoneE164: body.phoneE164 });
+    if (!loaded) return { ok: false, message: "Müşteri bulunamadı." };
+    const { id: customerId, ...session } = loaded;
 
     await this.audit.log({
       action: "CUSTOMER_PORTAL_OTP_VERIFIED",
       entityType: "CUSTOMER",
-      entityId: customer.id,
-      meta: { phoneE164: body.phoneE164, contractCount: customer.contracts.length },
+      entityId: customerId,
+      meta: { phoneE164: body.phoneE164, contractCount: session.contracts.length },
     });
 
-    return {
-      ok: true,
-      customer: { fullName: customer.fullName, phoneE164: customer.phoneE164 },
-      contracts: mapPortalContracts(customer.contracts),
-    };
+    return { ok: true, ...session };
+  }
+
+  // Giriş yapmış müşterinin taksit listesini tazeler. Ödeme tamamlandığında
+  // sayfa bu ucu çağırır; aksi halde ekranda giriş anındaki eski liste kalır.
+  @Post("contracts")
+  async refreshContracts(@Body() body: PortalTokenDto) {
+    const payload = verifyPortalToken(body.token, getPortalSecret(this.config), "SESSION");
+    if (!payload) {
+      return { ok: false, code: "SESSION_EXPIRED", message: "Oturum süresi doldu." };
+    }
+
+    const loaded = await this.loadPortalCustomer({ id: payload.customerId }, payload.contractId);
+    if (!loaded) return { ok: false, message: "Müşteri bulunamadı." };
+
+    const { id: _customerId, ...session } = loaded;
+    return { ok: true, ...session };
   }
 
   // Sunum sonunda satışçının ürettiği kısa ömürlü linkle OTP'siz giriş.
-  // Token'daki sözleşme henüz APPROVED olmasa da listelenir; ödeme yine
-  // validateContractForPayment'taki APPROVED şartına takılır.
   @Post("token-login")
-  async tokenLogin(@Body() body: TokenLoginDto) {
-    const payload = verifyPortalToken(body.token, getPortalSecret(this.config));
+  async tokenLogin(@Body() body: PortalTokenDto) {
+    const payload = verifyPortalToken(body.token, getPortalSecret(this.config), "LINK");
 
     if (!payload) {
       return { ok: false, message: "Bağlantının süresi dolmuş. Lütfen telefon numaranızla giriş yapın." };
     }
 
-    const customer = await this.prisma.customer.findUnique({
-      where: { id: payload.customerId },
-      select: {
-        id: true,
-        fullName: true,
-        phoneE164: true,
-        contracts: {
-          where: { OR: [{ status: "APPROVED" }, { id: payload.contractId }] },
-          select: PORTAL_CONTRACT_SELECT,
-        },
-      },
-    });
-
-    if (!customer) return { ok: false, message: "Müşteri bulunamadı." };
+    const loaded = await this.loadPortalCustomer({ id: payload.customerId }, payload.contractId);
+    if (!loaded) return { ok: false, message: "Müşteri bulunamadı." };
+    const { id: customerId, ...session } = loaded;
 
     await this.audit.log({
       action: "CUSTOMER_PORTAL_TOKEN_LOGIN",
       entityType: "CUSTOMER",
-      entityId: customer.id,
+      entityId: customerId,
       contractId: payload.contractId,
-      meta: { phoneE164: customer.phoneE164, contractCount: customer.contracts.length },
+      meta: { phoneE164: session.customer.phoneE164, contractCount: session.contracts.length },
     });
 
-    return {
-      ok: true,
-      customer: { fullName: customer.fullName, phoneE164: customer.phoneE164 },
-      contracts: mapPortalContracts(customer.contracts),
-    };
+    return { ok: true, ...session };
   }
 
   @Post("initiate-payment")
@@ -316,10 +314,13 @@ export class CustomerPortalController {
     );
     if (!validation.ok) return validation;
 
+    // Kaydedilen tutar sunucunun hesabıdır (client'ınki değil)
+    const { payableCents } = validation;
+
     const transaction = await this.prisma.posTransaction.create({
       data: {
         contractId: body.contractId,
-        amountCents: body.amountCents,
+        amountCents: payableCents,
         installmentIds: body.installmentIds,
         status: "PENDING",
       },
@@ -332,7 +333,7 @@ export class CustomerPortalController {
       entityId: transaction.id,
       contractId: body.contractId,
       meta: {
-        amountCents: body.amountCents,
+        amountCents: payableCents,
         installmentCount: body.installmentIds.length,
         installmentIds: body.installmentIds,
         phoneE164: body.phoneE164,
@@ -401,6 +402,8 @@ export class CustomerPortalController {
     const quoted = await this.validateAndQuoteTry(body);
     if (!quoted.ok) return quoted;
     const chargedTryCents = quoted.quote.amountTryCents;
+    // Kaydedilen ve tahsis edilen EUR tutarı sunucunun hesabıdır (client'ınki değil)
+    const payableCents = quoted.payableCents;
 
     // Müşterinin ekranda onayladığı TL tutar sunucu hesabıyla birebir aynı olmalı;
     // kur bu arada değiştiyse farklı tutar çekmek yerine işlem reddedilir.
@@ -434,7 +437,7 @@ export class CustomerPortalController {
     const transaction = await this.prisma.posTransaction.create({
       data: {
         contractId: body.contractId,
-        amountCents: body.amountCents,
+        amountCents: payableCents,
         installmentIds: body.installmentIds,
         status: "PENDING",
         mpiTransactionId,
@@ -452,7 +455,7 @@ export class CustomerPortalController {
       entityId: transaction.id,
       contractId: body.contractId,
       meta: {
-        amountCents: body.amountCents,
+        amountCents: payableCents,
         ...fxFields,
         installmentIds: body.installmentIds,
         cardBin: cardNumber.substring(0, 6),
@@ -499,8 +502,8 @@ export class CustomerPortalController {
       });
 
       if (vposResult.approved) {
-        await this.allocateAndComplete(transaction.id, body.contractId, body.amountCents, body.installmentIds, vposResult.hostReference ?? "");
-        this.sendPaymentNotifications(transaction.id, body.contractId, body.amountCents).catch(() => {});
+        await this.allocateAndComplete(transaction.id, body.contractId, payableCents, body.installmentIds, vposResult.hostReference ?? "");
+        this.sendPaymentNotifications(transaction.id, body.contractId, payableCents).catch(() => {});
         return { ok: true, enrolled: false, approved: true, reference: vposResult.hostReference };
       } else {
         const code = await this.failTransaction({
@@ -788,6 +791,52 @@ export class CustomerPortalController {
     return (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket?.remoteAddress ?? "0.0.0.0";
   }
 
+  // verify-otp / token-login / contracts uçlarının ortak veri yüklemesi.
+  // Dönen yanıt her üçünde de aynı şekildedir; içindeki sessionToken ile sayfa
+  // ödeme sonrası listeyi tazeleyebilir (OTP tekrar istenmez).
+  // linkContractId: LINK ile girildiyse oturum token'ında taşınır (audit izi).
+  private async loadPortalCustomer(
+    where: Prisma.CustomerWhereUniqueInput,
+    linkContractId?: string,
+  ) {
+    const customer = await this.prisma.customer.findUnique({
+      where,
+      select: {
+        id: true,
+        fullName: true,
+        phoneE164: true,
+        contracts: {
+          // Onay bekleyen sözleşmelerin taksitleri de listelenir; peşinat
+          // ödemesi sözleşmeyi otomatik APPROVED yapar. Yalnızca REJECTED gizlenir.
+          where: { status: { not: "REJECTED" as const } },
+          select: PORTAL_CONTRACT_SELECT,
+        },
+      },
+    });
+
+    if (!customer) return null;
+
+    const sessionExpiresAt = Date.now() + PORTAL_SESSION_TTL_MS;
+    const sessionToken = createPortalToken(
+      {
+        customerId: customer.id,
+        contractId: linkContractId,
+        purpose: "SESSION",
+        expiresAt: sessionExpiresAt,
+      },
+      getPortalSecret(this.config),
+    );
+
+    return {
+      id: customer.id,
+      // Oturum ömrünün tek sahibi sunucudur; site kendi süre sabitini tutmaz
+      customer: { fullName: customer.fullName, phoneE164: customer.phoneE164 },
+      contracts: mapPortalContracts(customer.contracts),
+      sessionToken,
+      sessionExpiresAt,
+    };
+  }
+
   // Başarısız ödemenin tek çıkış noktası: işlem FAILED'a çekilir ve gerekçesi
   // audit log'a yazılır. Teknik detay (banka ret kodu/metni, 3D alanları) burada
   // kalıcılaşır; çağıran yalnızca müşteriye gidecek kategoriyi alır.
@@ -824,7 +873,7 @@ export class CustomerPortalController {
     body: InitiatePaymentDto,
   ): Promise<
     | { ok: false; code: CustomerErrorCode; message: string }
-    | { ok: true; quote: EurTryQuote }
+    | { ok: true; quote: EurTryQuote; payableCents: number }
   > {
     const [validation, quote] = await Promise.all([
       this.validateContractForPayment(body.contractId, body.phoneE164, body.installmentIds, body.amountCents),
@@ -839,7 +888,7 @@ export class CustomerPortalController {
       };
     }
 
-    return { ok: true, quote };
+    return { ok: true, quote, payableCents: validation.payableCents };
   }
 
   private async validateContractForPayment(
@@ -847,9 +896,10 @@ export class CustomerPortalController {
     phoneE164: string,
     installmentIds: string[],
     amountCents: number,
+    // Başarılı sonuçtaki payableCents sunucunun hesabıdır ve tahsilatta
+    // kullanılacak tek tutardır — client'ın gönderdiği değer kaydedilmez.
   ): Promise<
-    | { ok: false; code: CustomerErrorCode; message: string }
-    | { ok: true; selectedInstallments: Array<{ id: string; baseAmountCents: number; paidAmountCents: number }> }
+    { ok: false; code: CustomerErrorCode; message: string } | { ok: true; payableCents: number }
   > {
     const contract = await this.prisma.contract.findUnique({
       where: { id: contractId },
@@ -872,21 +922,38 @@ export class CustomerPortalController {
 
     const invalid = (message: string) =>
       ({ ok: false as const, code: "CONTRACT_INVALID" as const, message });
+    // Ekrandaki liste sunucudaki gerçekle uyuşmuyor — sayfa listeyi tazeleyip
+    // müşteriden seçimi gözden geçirmesini ister.
+    const stale = (message: string) =>
+      ({ ok: false as const, code: "STALE_SELECTION" as const, message });
 
     if (!contract) return invalid("Sözleşme bulunamadı.");
     if (contract.customer.phoneE164 !== phoneE164) return invalid("Yetkisiz işlem.");
-    if (contract.status !== "APPROVED") return invalid("Sözleşme ödenebilir durumda değil.");
+    // Onay bekleyen sözleşmelerde de tahsilat yapılır (peşinat ödemesi
+    // sözleşmeyi otomatik onaylar); yalnızca reddedilmiş sözleşme ödenemez.
+    if (contract.status === "REJECTED") return invalid("Sözleşme ödenebilir durumda değil.");
 
-    const selectedInstallments = contract.customPaymentPlan?.installments ?? [];
+    const selected = contract.customPaymentPlan?.installments ?? [];
 
-    if (selectedInstallments.length !== new Set(installmentIds).size) {
+    // Plana ait olmayan ya da tekrar eden id — gerçek bir seçim hatası
+    if (selected.length !== new Set(installmentIds).size) {
       return invalid("Geçersiz taksit seçimi.");
     }
 
-    const totalRemaining = selectedInstallments.reduce((s, i) => s + (i.baseAmountCents - i.paidAmountCents), 0);
-    if (amountCents > totalRemaining) return invalid("Ödeme tutarı seçili taksitlerin toplamını aşıyor.");
+    // Bu arada kapanmış taksit seçilmişse liste bayattır
+    if (selected.some((i) => remainingCents(i) <= 0)) {
+      return stale("Seçtiğiniz taksitlerden biri bu arada ödenmiş.");
+    }
 
-    return { ok: true, selectedInstallments };
+    // Tahsil edilecek tutarın tek kaynağı sunucudur; client'ın gönderdiği değer
+    // yalnızca "müşteri ekranda bunu onayladı" teyididir. Eşleşmiyorsa ekrandaki
+    // liste güncel değil demektir ve tahsilat yapılmaz.
+    const payableCents = selected.reduce((s, i) => s + remainingCents(i), 0);
+    if (amountCents !== payableCents) {
+      return stale("Taksit tutarları güncellenmiş.");
+    }
+
+    return { ok: true, payableCents };
   }
 
   private async allocateAndComplete(
@@ -897,6 +964,8 @@ export class CustomerPortalController {
     posReference: string,
     extra?: { mdStatus?: string; paresStatus?: string; eci?: string; cavv?: string; vposReference?: string },
   ): Promise<void> {
+    // Okuma transaction dışında: satır kilidini gereksiz yere uzun tutmamak için.
+    // Araya başka bir tahsilat girerse aşağıdaki koşullu güncelleme yakalar.
     const installments = await this.prisma.customPaymentInstallment.findMany({
       where: { id: { in: installmentIds } },
       select: { id: true, baseAmountCents: true, paidAmountCents: true, dueDate: true },
@@ -906,27 +975,37 @@ export class CustomerPortalController {
     let remaining = amountCents;
     const now = new Date();
     const allocationLog: { installmentId: string; amountCents: number; isPaid: boolean }[] = [];
+    let autoApproved = false;
 
     try {
       await this.prisma.$transaction(async (tx) => {
+        const allocations: { posTransactionId: string; installmentId: string; amountCents: number }[] = [];
+
         for (const inst of installments) {
           if (remaining <= 0) break;
-          const installmentRemaining = inst.baseAmountCents - inst.paidAmountCents;
+          const installmentRemaining = remainingCents(inst);
           if (installmentRemaining <= 0) continue;
           const toPay = Math.min(installmentRemaining, remaining);
           const newPaid = inst.paidAmountCents + toPay;
           const isPaid = newPaid >= inst.baseAmountCents;
 
-          await tx.posAllocation.create({
-            data: { posTransactionId: transactionId, installmentId: inst.id, amountCents: toPay },
-          });
-          await tx.customPaymentInstallment.update({
-            where: { id: inst.id },
+          // paidAmountCents okuduğumuz değerde kalmışsa güncellenir; araya başka
+          // bir tahsilat girdiyse count 0 döner ve tüm işlem geri alınır.
+          const { count } = await tx.customPaymentInstallment.updateMany({
+            where: { id: inst.id, paidAmountCents: inst.paidAmountCents },
             data: { paidAmountCents: newPaid, isPaid, paidAt: isPaid ? now : undefined },
           });
+          if (count !== 1) {
+            throw new Error(`Taksit ${inst.id} eşzamanlı olarak değişti — tahsis geri alındı`);
+          }
 
+          allocations.push({ posTransactionId: transactionId, installmentId: inst.id, amountCents: toPay });
           allocationLog.push({ installmentId: inst.id, amountCents: toPay, isPaid });
           remaining -= toPay;
+        }
+
+        if (allocations.length > 0) {
+          await tx.posAllocation.createMany({ data: allocations });
         }
 
         await tx.posTransaction.update({
@@ -953,11 +1032,110 @@ export class CustomerPortalController {
             ...(extra ?? {}),
           },
         });
+
+        autoApproved = await this.autoApproveIfDepositPaid(tx, contractId, transactionId);
       });
     } catch (e: any) {
       if (e?.code === "P2002") return; // Duplike unique constraint — idempotent
       throw e;
     }
+
+    // Komisyon hesabı APPROVED durumunu şart koştuğundan transaction commit
+    // edildikten sonra çağrılır. Tahsilat kesinleşmiştir; buradaki bir hata
+    // ödemeyi geri almaz, yalnızca loglanır (yetkili onayı gibi idempotent —
+    // sonraki bir onay/ödeme denemesi komisyonları tamamlar).
+    if (autoApproved) {
+      try {
+        await this.commissions.calculateForApprovedContract(contractId);
+      } catch (e) {
+        this.logger.error(`Otomatik onay sonrası komisyon hesabı başarısız (contract ${contractId})`, e as Error);
+      }
+      this.sendAutoApprovalNotifications(contractId).catch(() => {});
+    }
+  }
+
+  // Peşinat (planın en erken vadeli taksiti) tamamen ödendiyse sözleşmeyi
+  // yetkili onayı beklemeden APPROVED durumuna geçirir. Peşinat etiketle değil
+  // vade sırasıyla tanınır — etiketler satış ekranında düzenlenebilir.
+  // approvedById boş bırakılır: onay bir kullanıcıya değil sisteme aittir.
+  private async autoApproveIfDepositPaid(
+    tx: Prisma.TransactionClient,
+    contractId: string,
+    transactionId: string,
+  ): Promise<boolean> {
+    const contract = await tx.contract.findUnique({
+      where: { id: contractId },
+      select: {
+        status: true,
+        customPaymentPlan: {
+          select: {
+            installments: {
+              select: { id: true, isPaid: true },
+              orderBy: { dueDate: "asc" as const },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    if (!contract) return false;
+    if (contract.status === "APPROVED" || contract.status === "REJECTED") return false;
+
+    const deposit = contract.customPaymentPlan?.installments[0];
+    if (!deposit?.isPaid) return false;
+
+    await tx.contract.update({
+      where: { id: contractId },
+      data: { status: "APPROVED" },
+    });
+
+    await this.audit.logWithTx(tx, {
+      action: "CONTRACT_AUTO_APPROVED",
+      entityType: "CONTRACT",
+      entityId: contractId,
+      contractId,
+      meta: {
+        reason: "DEPOSIT_PAID",
+        previousStatus: contract.status,
+        depositInstallmentId: deposit.id,
+        posTransactionId: transactionId,
+      },
+    });
+
+    return true;
+  }
+
+  // Peşinat ödemesiyle otomatik onaylanan sözleşmeyi satışçı zincirine duyurur
+  private async sendAutoApprovalNotifications(contractId: string): Promise<void> {
+    const contract = await this.prisma.contract.findUnique({
+      where: { id: contractId },
+      select: {
+        salespersonId: true,
+        customer: { select: { fullName: true } },
+      },
+    });
+
+    if (!contract) return;
+
+    const title = "Sözleşme Onaylandı";
+    const body = `${contract.customer.fullName} — peşinat ödemesiyle sözleşme otomatik onaylandı`;
+
+    const recipientIds = await this.team.getAncestorIds(contract.salespersonId);
+
+    await Promise.all(
+      recipientIds.map((recipientId) =>
+        this.notifs.create({
+          type: "PAYMENT_RECEIVED",
+          title,
+          body,
+          actorId: contract.salespersonId,
+          recipientId,
+          entityId: contractId,
+          entityType: "CONTRACT",
+        }),
+      ),
+    );
   }
 
   private async sendPaymentNotifications(
