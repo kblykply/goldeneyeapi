@@ -98,7 +98,7 @@ type CustomerErrorCode =
   | "THREE_D_FAILED"         // 3D şifre doğrulaması geçilemedi
   | "VERIFICATION_UNAVAILABLE" // Kart doğrulama servisi başlatılamadı
   | "SECURITY_CHECK_FAILED"  // Tutar/hash bütünlük kontrolü
-  | "SESSION_EXPIRED"        // İşlem kaydı bulunamadı / kart verisi çözülemedi
+  | "SESSION_EXPIRED"        // Portal oturumu doldu / işlem kaydı bulunamadı / kart verisi çözülemedi
   | "ALREADY_PROCESSED"      // İşlem daha önce sonuçlanmış
   | "RATE_UNAVAILABLE"       // Güncel kur alınamadı
   | "QUOTE_EXPIRED"          // Kur teklifi eskidi
@@ -118,16 +118,15 @@ class VerifyOtpDto {
   otp: string;
 }
 
-// token-login ve contracts uçlarının ortak gövdesi
+// token-login, contracts ve ödeme uçlarının ortak gövdesi
 class PortalTokenDto {
   @IsString()
   token: string;
 }
 
-class InitiatePaymentDto {
-  @IsString()
-  phoneE164: string;
-
+// Ödeme uçları giriş yapmış müşterinin oturum token'ını taşır; sözleşmenin
+// sahibi token'daki müşteriden doğrulanır (telefon numarası tek başına yetmez)
+class InitiatePaymentDto extends PortalTokenDto {
   @IsString()
   contractId: string;
 
@@ -139,17 +138,6 @@ class InitiatePaymentDto {
   @IsInt()
   @Min(1)
   amountCents: number;
-}
-
-class PaymentCallbackDto {
-  @IsString()
-  transactionId: string;
-
-  @IsString()
-  posReference: string;
-
-  @IsString()
-  status: "SUCCESS" | "FAILED";
 }
 
 class Payment3dInitDto extends InitiatePaymentDto {
@@ -304,84 +292,6 @@ export class CustomerPortalController {
     return { ok: true, ...session };
   }
 
-  @Post("initiate-payment")
-  async initiatePayment(@Body() body: InitiatePaymentDto) {
-    const validation = await this.validateContractForPayment(
-      body.contractId,
-      body.phoneE164,
-      body.installmentIds,
-      body.amountCents,
-    );
-    if (!validation.ok) return validation;
-
-    // Kaydedilen tutar sunucunun hesabıdır (client'ınki değil)
-    const { payableCents } = validation;
-
-    const transaction = await this.prisma.posTransaction.create({
-      data: {
-        contractId: body.contractId,
-        amountCents: payableCents,
-        installmentIds: body.installmentIds,
-        status: "PENDING",
-      },
-      select: { id: true },
-    });
-
-    await this.audit.log({
-      action: "PAYMENT_INITIATED",
-      entityType: "POS_TRANSACTION",
-      entityId: transaction.id,
-      contractId: body.contractId,
-      meta: {
-        amountCents: payableCents,
-        installmentCount: body.installmentIds.length,
-        installmentIds: body.installmentIds,
-        phoneE164: body.phoneE164,
-      },
-    });
-
-    return { ok: true, transactionId: transaction.id };
-  }
-
-  @Post("payment-callback")
-  async paymentCallback(@Body() body: PaymentCallbackDto) {
-    const transaction = await this.prisma.posTransaction.findUnique({
-      where: { id: body.transactionId },
-      select: { id: true, amountCents: true, installmentIds: true, status: true, contractId: true },
-    });
-
-    if (!transaction) return { ok: false, message: "İşlem bulunamadı." };
-
-    if (transaction.status !== "PENDING") {
-      return { ok: true };
-    }
-
-    if (body.status === "FAILED") {
-      await this.prisma.posTransaction.update({
-        where: { id: transaction.id },
-        data: { status: "FAILED", posReference: body.posReference },
-      });
-
-      await this.audit.log({
-        action: "PAYMENT_FAILED",
-        entityType: "POS_TRANSACTION",
-        entityId: transaction.id,
-        contractId: transaction.contractId,
-        meta: {
-          posReference: body.posReference,
-          amountCents: transaction.amountCents,
-        },
-      });
-
-      return { ok: true };
-    }
-
-    await this.allocateAndComplete(transaction.id, transaction.contractId, transaction.amountCents, transaction.installmentIds, body.posReference);
-    this.sendPaymentNotifications(transaction.id, transaction.contractId, transaction.amountCents).catch(() => {});
-
-    return { ok: true };
-  }
-
   // ─── 3D Secure ───────────────────────────────────────────────────────────────
 
   // Kart formu açılmadan önce çağrılır: seçilen taksitlerin EUR toplamının o anki
@@ -421,8 +331,9 @@ export class CustomerPortalController {
     const mpiTransactionId = randomUUID().replace(/-/g, "");
     const clientIp = this.getClientIp(req);
 
-    // Kart verisi geçici olarak şifrelenmiş token'da tutulur; işlem sonrası temizlenir
-    const cardToken = encryptCardToken(cardNumber, body.cardExpiry, this.cardSecret, body.cardCvv);
+    // Pan/Expiry 3D dönüşüne kadar şifrelenmiş token'da tutulur; işlem sonrası ya da
+    // yarıda kalırsa 30 dk içinde silinir (PosTransactionCleanupService). CVV saklanmaz.
+    const cardToken = encryptCardToken(cardNumber, body.cardExpiry, this.cardSecret);
 
     // İşlem kaydına ve audit'e birebir aynı kur alanları yazılır;
     // para birimi etiketi bankaya giden koddan (ZIRAAT_CURRENCY_CODE) türetilir
@@ -720,13 +631,11 @@ export class CustomerPortalController {
 
     let pan = "";
     let expiryYYMM = "";
-    let cvv: string | undefined;
     if (transaction.cardToken) {
       try {
         const card = decryptCardToken(transaction.cardToken, this.cardSecret);
         pan = card.pan;
         expiryYYMM = card.expiry;
-        cvv = card.cvv;
       } catch {
         return redirectFail(
           await this.failTransaction({
@@ -747,7 +656,6 @@ export class CustomerPortalController {
       pan,
       expiryYYMM,
       amountCents: bankAmountCents,
-      cvv,
       eci,
       cavv: vposCavv,
       mpiTransactionId: transaction.mpiTransactionId ?? transactionId,
@@ -866,7 +774,8 @@ export class CustomerPortalController {
     return customerCode;
   }
 
-  // quote ve 3d-init'in ortak ön adımı: sözleşme doğrulaması ve kur çekimi
+  // quote ve 3d-init'in ortak ön adımı: oturum token'ı DB'ye ve TCMB'ye gitmeden
+  // önce doğrulanır (yalnızca HMAC); sonra sözleşme doğrulaması ve kur çekimi
   // birbirinden bağımsız olduğundan paralel yürütülür. Kur alınamazsa ödeme
   // başlatılmaz — asla tahmini/varsayılan kurla tahsilat yapılmaz.
   private async validateAndQuoteTry(
@@ -875,8 +784,13 @@ export class CustomerPortalController {
     | { ok: false; code: CustomerErrorCode; message: string }
     | { ok: true; quote: EurTryQuote; payableCents: number }
   > {
+    const session = verifyPortalToken(body.token, getPortalSecret(this.config), "SESSION");
+    if (!session) {
+      return { ok: false, code: "SESSION_EXPIRED", message: "Oturum süresi doldu." };
+    }
+
     const [validation, quote] = await Promise.all([
-      this.validateContractForPayment(body.contractId, body.phoneE164, body.installmentIds, body.amountCents),
+      this.validateContractForPayment(body.contractId, session.customerId, body.installmentIds, body.amountCents),
       this.fx.quoteEurCents(body.amountCents),
     ]);
     if (!validation.ok) return validation;
@@ -893,7 +807,7 @@ export class CustomerPortalController {
 
   private async validateContractForPayment(
     contractId: string,
-    phoneE164: string,
+    customerId: string,
     installmentIds: string[],
     amountCents: number,
     // Başarılı sonuçtaki payableCents sunucunun hesabıdır ve tahsilatta
@@ -905,7 +819,7 @@ export class CustomerPortalController {
       where: { id: contractId },
       select: {
         status: true,
-        customer: { select: { phoneE164: true } },
+        customerId: true,
         customPaymentPlan: {
           select: {
             // Yalnızca ödenmek istenen taksitler çekilir; uzun planlarda tüm
@@ -928,7 +842,7 @@ export class CustomerPortalController {
       ({ ok: false as const, code: "STALE_SELECTION" as const, message });
 
     if (!contract) return invalid("Sözleşme bulunamadı.");
-    if (contract.customer.phoneE164 !== phoneE164) return invalid("Yetkisiz işlem.");
+    if (contract.customerId !== customerId) return invalid("Yetkisiz işlem.");
     // Onay bekleyen sözleşmelerde de tahsilat yapılır (peşinat ödemesi
     // sözleşmeyi otomatik onaylar); yalnızca reddedilmiş sözleşme ödenemez.
     if (contract.status === "REJECTED") return invalid("Sözleşme ödenebilir durumda değil.");

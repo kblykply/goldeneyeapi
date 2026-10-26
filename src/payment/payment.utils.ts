@@ -11,17 +11,19 @@ function deriveKey(secret: string): Buffer {
   return crypto.createHash('sha256').update(secret).digest();
 }
 
-export function encryptCardToken(pan: string, expiry: string, secret: string, cvv?: string): string {
+// CVV token'a bilerek konmaz (PCI DSS 3.3.1): 3D Secure satışta Cvv opsiyoneldir
+// (doküman s.35 zorunluluk tablosu), Pan ve Expiry zorunludur.
+export function encryptCardToken(pan: string, expiry: string, secret: string): string {
   const key = deriveKey(secret);
   const iv = crypto.randomBytes(IV_LEN);
   const cipher = crypto.createCipheriv(CIPHER, key, iv) as crypto.CipherGCM;
-  const payload = JSON.stringify({ pan, expiry, ...(cvv ? { cvv } : {}) });
+  const payload = JSON.stringify({ pan, expiry });
   const encrypted = Buffer.concat([cipher.update(payload, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return Buffer.concat([iv, tag, encrypted]).toString('base64');
 }
 
-export function decryptCardToken(token: string, secret: string): { pan: string; expiry: string; cvv?: string } {
+export function decryptCardToken(token: string, secret: string): { pan: string; expiry: string } {
   const key = deriveKey(secret);
   const buf = Buffer.from(token, 'base64');
   const iv = buf.subarray(0, IV_LEN);
@@ -30,7 +32,7 @@ export function decryptCardToken(token: string, secret: string): { pan: string; 
   const decipher = crypto.createDecipheriv(CIPHER, key, iv) as crypto.DecipherGCM;
   decipher.setAuthTag(tag);
   const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
-  return JSON.parse(decrypted) as { pan: string; expiry: string; cvv?: string };
+  return JSON.parse(decrypted) as { pan: string; expiry: string };
 }
 
 export function calculateMpiHash(params: MpiHashParams): string {

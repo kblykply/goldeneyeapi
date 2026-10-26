@@ -5,11 +5,18 @@ import { ZiraatMpiService } from './ziraat-mpi.service';
 import { ZiraatVposService } from './ziraat-vpos.service';
 import { ExchangeRateService } from './exchange-rate.service';
 import { BankMessageLogService } from './bank-message-log.service';
+import { PosTransactionCleanupService } from './pos-transaction-cleanup.service';
 
 @Module({
-  // ScheduleModule: banka mesaj log'larının saklama süresi temizliği için
+  // ScheduleModule: banka mesaj log'larının saklama süresi ve yarıda kalan ödemelerin temizliği için
   imports: [ScheduleModule.forRoot(), PrismaModule],
-  providers: [ZiraatMpiService, ZiraatVposService, ExchangeRateService, BankMessageLogService],
+  providers: [
+    ZiraatMpiService,
+    ZiraatVposService,
+    ExchangeRateService,
+    BankMessageLogService,
+    PosTransactionCleanupService,
+  ],
   exports: [ZiraatMpiService, ZiraatVposService, ExchangeRateService, BankMessageLogService],
 })
 export class PaymentModule {}
