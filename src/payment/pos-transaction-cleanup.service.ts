@@ -27,6 +27,16 @@ export class PosTransactionCleanupService {
   async expireAbandoned(): Promise<void> {
     const cutoff = new Date(Date.now() - ABANDONED_AFTER_MS);
     try {
+      // Kartlı ödeme uçları kaldırıldı (24.11.2026); yeni kart token'ı oluşmaz.
+      // Eski sürümden kalmış olabilecek her token, durumundan bağımsız silinir.
+      const wiped = await this.prisma.posTransaction.updateMany({
+        where: { cardToken: { not: null } },
+        data: { cardToken: null },
+      });
+      if (wiped.count > 0) {
+        this.logger.warn(`${wiped.count} işlemde kalan kart verisi silindi`);
+      }
+
       const stale = await this.prisma.posTransaction.findMany({
         where: { status: 'PENDING', createdAt: { lt: cutoff } },
         select: { id: true, contractId: true },

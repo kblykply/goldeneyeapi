@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Query, Req, Res, Logger } from "@nestjs/common";
+import { Controller, Post, Body, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
   IsString,
@@ -6,9 +6,7 @@ import {
   IsInt,
   Min,
   ArrayNotEmpty,
-  IsOptional,
 } from "class-validator";
-import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { OtpService } from "../otp/otp.service";
@@ -16,18 +14,7 @@ import { AuditService } from "../audit/audit.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { TeamService } from "../team/team.service";
 import { SkipAuth } from "../auth/skip-auth.decorator";
-import { ZiraatMpiService } from "../payment/ziraat-mpi.service";
-import { ZiraatVposService } from "../payment/ziraat-vpos.service";
 import { ExchangeRateService, type EurTryQuote } from "../payment/exchange-rate.service";
-import { BankMessageLogService } from "../payment/bank-message-log.service";
-import {
-  calculateMpiHash,
-  centsToDecimalString,
-  amountMatchesExpected,
-  encryptCardToken,
-  decryptCardToken,
-  detectBrand,
-} from "../payment/payment.utils";
 import { CommissionService } from "../commissions/commission.service";
 import { verifyPortalToken, createPortalToken, getPortalSecret } from "./portal-token.utils";
 
@@ -87,9 +74,6 @@ function mapPortalContracts<
   }));
 }
 
-// PARes Status (Y/A/N/U) → numeric mdStatus (doküman bölüm 5.8 hash parametreleri)
-const PARES_TO_MD_STATUS: Record<string, string> = { Y: "1", A: "4", U: "9", N: "0" };
-
 // Müşteriye gösterilen hata kategorileri. Banka ret kodu, hash/tutar
 // uyuşmazlığı gibi teknik gerekçeler audit log'da kalır; ekrana yalnızca bu
 // kategori gider ve site bunu kendi diline çevirir.
@@ -140,54 +124,10 @@ class InitiatePaymentDto extends PortalTokenDto {
   amountCents: number;
 }
 
-class Payment3dInitDto extends InitiatePaymentDto {
-  // Müşteriye quote'ta gösterilen TL tutar (kuruş). Sunucu kendi hesabıyla
-  // birebir karşılaştırır; kur değiştiyse işlem reddedilir — müşteriden
-  // onayladığından farklı bir tutar asla çekilmez. Finansal hesapta kullanılmaz.
-  @IsInt()
-  @Min(1)
-  quotedTryCents: number;
-
-  @IsString()
-  cardNumber: string;
-
-  @IsString()
-  cardExpiry: string; // YYMM — e.g. "2603"
-
-  @IsString()
-  cardCvv: string;
-
-  @IsString()
-  cardholderName: string;
-
-  @IsOptional()
-  @IsString()
-  locale?: string;
-}
-
-// Ziraat MPI'ın SuccessUrl/FailureUrl'a POST ettiği alanlar (doküman bölüm 5.6)
-// Hem büyük hem küçük harf varyantları kabul edilir — banka sürümüne göre değişebilir
-class ThreeDCallbackDto {
-  @IsOptional() @IsString() Status?: string;   // PARes sonucu: Y/A/N/U
-  @IsOptional() @IsString() status?: string;
-  @IsOptional() @IsString() mdStatus?: string; // Sayısal durum — bazı sürümlerde gelebilir
-  @IsOptional() @IsString() Eci?: string;
-  @IsOptional() @IsString() eci?: string;
-  @IsOptional() @IsString() Cavv?: string;
-  @IsOptional() @IsString() cavv?: string;
-  @IsOptional() @IsString() paresStatus?: string;
-  @IsOptional() @IsString() ParesStatus?: string;
-  @IsOptional() @IsString() PARes?: string;
-  @IsOptional() @IsString() MD?: string;
-  @IsOptional() @IsString() Hash?: string;
-  @IsOptional() @IsString() VerifyEnrollmentRequestId?: string;
-}
-
 @SkipAuth()
 @Controller("customer-portal")
 export class CustomerPortalController {
   private readonly logger = new Logger(CustomerPortalController.name);
-  private readonly cardSecret: string;
 
   constructor(
     private prisma: PrismaService,
@@ -195,15 +135,10 @@ export class CustomerPortalController {
     private audit: AuditService,
     private notifs: NotificationsService,
     private team: TeamService,
-    private mpi: ZiraatMpiService,
-    private vpos: ZiraatVposService,
     private fx: ExchangeRateService,
-    private bankLog: BankMessageLogService,
     private commissions: CommissionService,
     private config: ConfigService,
-  ) {
-    this.cardSecret = this.config.getOrThrow("CARD_TOKEN_SECRET");
-  }
+  ) {}
 
   @Post("request-otp")
   async requestOtp(@Body() body: RequestOtpDto) {
@@ -305,393 +240,12 @@ export class CustomerPortalController {
     return { ok: true, ...quoted.quote };
   }
 
-  @Post("payment-3d-init")
-  async payment3dInit(@Body() body: Payment3dInitDto, @Req() req: any) {
-    // Kur sunucuda çekilir ve işlem kaydına kilitlenir; bankaya giden tutar
-    // her adımda (MPI, VPos, callback doğrulaması) bu kilitli TL değerdir.
-    const quoted = await this.validateAndQuoteTry(body);
-    if (!quoted.ok) return quoted;
-    const chargedTryCents = quoted.quote.amountTryCents;
-    // Kaydedilen ve tahsis edilen EUR tutarı sunucunun hesabıdır (client'ınki değil)
-    const payableCents = quoted.payableCents;
-
-    // Müşterinin ekranda onayladığı TL tutar sunucu hesabıyla birebir aynı olmalı;
-    // kur bu arada değiştiyse farklı tutar çekmek yerine işlem reddedilir.
-    // Güncel teklif yanıtta döner; client yeni bir quote isteği atmadan gösterir.
-    if (body.quotedTryCents !== chargedTryCents) {
-      return {
-        ok: false,
-        code: "QUOTE_EXPIRED",
-        message: "Kur güncellendi. Lütfen tutarı yeniden onaylayın.",
-        ...quoted.quote,
-      };
-    }
-
-    const cardNumber = body.cardNumber.replace(/\s/g, "");
-    const mpiTransactionId = randomUUID().replace(/-/g, "");
-    const clientIp = this.getClientIp(req);
-
-    // Pan/Expiry 3D dönüşüne kadar şifrelenmiş token'da tutulur; işlem sonrası ya da
-    // yarıda kalırsa 30 dk içinde silinir (PosTransactionCleanupService). CVV saklanmaz.
-    const cardToken = encryptCardToken(cardNumber, body.cardExpiry, this.cardSecret);
-
-    // İşlem kaydına ve audit'e birebir aynı kur alanları yazılır;
-    // para birimi etiketi bankaya giden koddan (ZIRAAT_CURRENCY_CODE) türetilir
-    const fxFields = {
-      chargedCurrency: this.vpos.getCurrencyAlpha(),
-      chargedAmountCents: chargedTryCents,
-      fxRate: quoted.quote.rate,
-      fxRateSource: quoted.quote.rateSource,
-      fxRateAt: quoted.quote.rateAt,
-    };
-
-    const transaction = await this.prisma.posTransaction.create({
-      data: {
-        contractId: body.contractId,
-        amountCents: payableCents,
-        installmentIds: body.installmentIds,
-        status: "PENDING",
-        mpiTransactionId,
-        cardBin: cardNumber.substring(0, 6),
-        cardLast4: cardNumber.slice(-4),
-        cardToken,
-        ...fxFields,
-      },
-      select: { id: true },
-    });
-
-    await this.audit.log({
-      action: "PAYMENT_3D_INITIATED",
-      entityType: "POS_TRANSACTION",
-      entityId: transaction.id,
-      contractId: body.contractId,
-      meta: {
-        amountCents: payableCents,
-        ...fxFields,
-        installmentIds: body.installmentIds,
-        cardBin: cardNumber.substring(0, 6),
-        cardLast4: cardNumber.slice(-4),
-      },
-    });
-
-    const enrollment = await this.mpi.checkEnrollment({
-      pan: cardNumber,
-      expiryYYMM: body.cardExpiry,
-      amountCents: chargedTryCents,
-      mpiTransactionId,
-      cardholderName: body.cardholderName,
-      locale: body.locale,
-      posTransactionId: transaction.id,
-      contractId: body.contractId,
-    });
-
-    if (enrollment.status === "E" || enrollment.status === "U") {
-      const code = await this.failTransaction({
-        transactionId: transaction.id,
-        contractId: body.contractId,
-        reasonCode: `ENROLLMENT_${enrollment.status}`,
-        customerCode: "VERIFICATION_UNAVAILABLE",
-        meta: { bankMessage: enrollment.errorMessage ?? null },
-      });
-      return { ok: false, code, message: "Kart doğrulama başlatılamadı." };
-    }
-
-    if (enrollment.status === "N") {
-      // Kart 3D'ye kayıtlı değil — Half-Secure VPos çağrısı (doküman bölüm 5.4.3)
-      const eci = detectBrand(cardNumber) === "VISA" ? "06" : "02";
-      const vposResult = await this.vpos.processPayment({
-        pan: cardNumber,
-        expiryYYMM: body.cardExpiry,
-        amountCents: chargedTryCents,
-        cvv: body.cardCvv,
-        eci,
-        cavv: "",
-        mpiTransactionId,
-        clientIp,
-        posTransactionId: transaction.id,
-        contractId: body.contractId,
-      });
-
-      if (vposResult.approved) {
-        await this.allocateAndComplete(transaction.id, body.contractId, payableCents, body.installmentIds, vposResult.hostReference ?? "");
-        this.sendPaymentNotifications(transaction.id, body.contractId, payableCents).catch(() => {});
-        return { ok: true, enrolled: false, approved: true, reference: vposResult.hostReference };
-      } else {
-        const code = await this.failTransaction({
-          transactionId: transaction.id,
-          contractId: body.contractId,
-          reasonCode: "VPOS_DECLINED_HALF_SECURE",
-          customerCode: "CARD_DECLINED",
-          fields: { eci, mdStatus: "0" },
-          meta: {
-            bankResponseCode: vposResult.responseCode,
-            bankResponseText: vposResult.responseText,
-          },
-        });
-        return { ok: false, enrolled: false, approved: false, code, message: "Ödeme reddedildi." };
-      }
-    }
-
-    // Status === 'Y' — Kart 3D'ye kayıtlı, ACS'e yönlendir
-    // termUrl: MPI'ın kendi URL'i (doküman 5.5) — frontend bu URL'i ACS formuna koymalı
-    return {
-      ok: true,
-      enrolled: true,
-      transactionId: transaction.id,
-      acsUrl: enrollment.acsUrl,
-      pareq: enrollment.pareq,
-      md: enrollment.md,
-      termUrl: enrollment.termUrl,
-    };
-  }
-
-  // Ziraat MPI'ın SuccessUrl/FailureUrl'a yaptığı browser POST (doküman bölüm 5.6)
-  @Post("3d-callback")
-  async threeDCallback(
-    @Query("transactionId") transactionId: string,
-    @Query("locale") localeParam: string,
-    @Body() body: ThreeDCallbackDto,
-    @Req() req: any,
-    @Res() res: any,
-  ) {
-    const frontendUrl = this.config.get("FRONTEND_URL", "");
-    // next-intl locale-prefix'li route kullanıyor; prefix olmadan /payment-tracking 404 verir.
-    // Banka SuccessUrl/FailureUrl'i aynen geri POST ettiği için locale query'den okunur.
-    const allowedLocales = ["tr", "en", "fa", "ru"];
-    const locale = allowedLocales.includes(localeParam) ? localeParam : "tr";
-    // Ekrana yalnızca müşteri kategorisi gider; teknik gerekçe audit log'da
-    const redirectFail = (code: CustomerErrorCode) => res.redirect(`${frontendUrl}/${locale}/payment-tracking?status=failed&code=${encodeURIComponent(code)}`);
-    const redirectOk = (ref: string) => res.redirect(`${frontendUrl}/${locale}/payment-tracking?status=success&ref=${encodeURIComponent(ref)}`);
-
-    // İşlem kaydı yoksa FAILED'a çekilecek satır da yok; audit yine de tutulur
-    if (!transactionId) {
-      await this.audit.log({
-        action: "PAYMENT_FAILED",
-        entityType: "POS_TRANSACTION",
-        entityId: "unknown",
-        meta: { reasonCode: "NO_TRANSACTION_ID", customerCode: "SESSION_EXPIRED" },
-      });
-      return redirectFail("SESSION_EXPIRED");
-    }
-
-    const transaction = await this.prisma.posTransaction.findFirst({
-      where: { mpiTransactionId: transactionId },
-      select: { id: true, amountCents: true, chargedAmountCents: true, installmentIds: true, status: true, contractId: true, mpiTransactionId: true, cardToken: true },
-    });
-
-    // Bankanın bize POST ettiği ham sonuç da mutabakat kanıtının parçası;
-    // gövde maskelenerek saklanır (PaReq/PARes kısaltılır, kart alanı gizlenir).
-    // Gövde serileştirme callback'i düşürmemeli — hata olursa kayıt yine yazılır.
-    const callbackStatus = body.Status ?? body.status ?? body.paresStatus ?? body.ParesStatus ?? "";
-    let callbackBody: string;
-    try {
-      callbackBody = new URLSearchParams(req.body ?? {}).toString();
-    } catch {
-      callbackBody = "[gövde serileştirilemedi]";
-    }
-
-    await this.bankLog.record({
-      service: "THREE_D_CALLBACK",
-      // Bankanın 3D sonucu: Y/A geçti, diğerleri reddedildi; işlem eşleşmediyse hata
-      outcome: !transaction
-        ? "ERROR"
-        : callbackStatus === "Y" || callbackStatus === "A"
-          ? "SUCCESS"
-          : "DECLINED",
-      endpoint: req.originalUrl ?? "/customer-portal/3d-callback",
-      requestBody: callbackBody,
-      mpiTransactionId: transactionId,
-      posTransactionId: transaction?.id,
-      contractId: transaction?.contractId,
-      resultCode: callbackStatus || body.mdStatus,
-      errorMessage: transaction ? undefined : "Eşleşen işlem kaydı bulunamadı",
-    });
-
-    if (!transaction) {
-      await this.audit.log({
-        action: "PAYMENT_FAILED",
-        entityType: "POS_TRANSACTION",
-        entityId: transactionId,
-        meta: { reasonCode: "TRANSACTION_NOT_FOUND", customerCode: "SESSION_EXPIRED", mpiTransactionId: transactionId },
-      });
-      return redirectFail("SESSION_EXPIRED");
-    }
-
-    if (transaction.status !== "PENDING") {
-      return transaction.status === "SUCCESS"
-        ? redirectOk(transaction.id)
-        : redirectFail("ALREADY_PROCESSED");
-    }
-
-    // ValidationPipe whitelist DTO dışı alanları siler; bankanın echo'ladığı
-    // PurchaseAmount/Currency gibi alanlar için ham gövdeye bakılır
-    const rawBody: Record<string, any> = req.body ?? {};
-    const paresStatus = body.Status ?? body.status ?? body.paresStatus ?? body.ParesStatus ?? "";
-    const eci = body.Eci ?? body.eci ?? "";
-    const cavv = body.Cavv ?? body.cavv ?? "";
-    const incomingHash = body.Hash ?? "";
-    const clientIp = this.getClientIp(req);
-    const mdStatus = body.mdStatus ?? PARES_TO_MD_STATUS[paresStatus] ?? "0";
-
-    // Hash, bankanın hesapladığı değerlerle birebir aynı girdilerden üretilmeli:
-    // banka callback'te echo'ladıysa onu kullan, yoksa kendi değerimize düş
-    const echoedAmount: string | undefined =
-      rawBody.PurchAmount ?? rawBody.PurchaseAmount ?? rawBody.purchaseAmount;
-    const echoedCurrency: string | undefined =
-      rawBody.PurchCurrency ?? rawBody.Currency ?? rawBody.currency;
-    // Bankaya giden tutar TL (chargedAmountCents); eski/geçiş kayıtları için amountCents'e düşülür
-    const bankAmountCents = transaction.chargedAmountCents ?? transaction.amountCents;
-    const expectedAmount = centsToDecimalString(bankAmountCents);
-
-    // Tutar bütünlüğü hash'ten bağımsız da doğrulanır.
-    // Not: bazı ACS/MPI sürümleri tutarı TR locale ("1.234,56") ya da küçük birim tam
-    // sayı ("10000") formatında echo'layabilir; amountMatchesExpected bu varyantları dener.
-    if (echoedAmount && !amountMatchesExpected(echoedAmount, bankAmountCents)) {
-      const sanitized = Object.fromEntries(
-        Object.entries(rawBody).map(([k, v]) => (/pan|card/i.test(k) ? [k, "***"] : [k, v])),
-      );
-      this.logger.warn(
-        `3D callback amount mismatch. echoed=${echoedAmount} expected=${expectedAmount} bankAmountCents=${bankAmountCents} transactionId=${transaction.id} body=${JSON.stringify(sanitized)}`,
-      );
-      return redirectFail(
-        await this.failTransaction({
-          transactionId: transaction.id,
-          contractId: transaction.contractId,
-          reasonCode: "AMOUNT_MISMATCH",
-          customerCode: "SECURITY_CHECK_FAILED",
-          fields: { mdStatus, paresStatus, eci, cavv },
-          meta: { echoedAmount, expectedAmount, bankAmountCents },
-        }),
-      );
-    }
-
-    if (incomingHash) {
-      // Doküman 5.8: VerifyEnrollmentRequestId + HostMerchantNumber + CurrencyCode +
-      // Amount + Eci + Cavv + mdstatus + ParesStatus + MPI şifresi → ISO-8859-9 → SHA-256 → Base64.
-      // Amount formatı ("100" / "100.00") dokümanda belirsiz; iki aday da denenir.
-      const amountCandidates = [...new Set([echoedAmount, expectedAmount].filter(Boolean))] as string[];
-      const currencyCandidates = [
-        ...new Set([echoedCurrency, this.mpi.getVposCurrencyCode()].filter(Boolean)),
-      ] as string[];
-      const hashInputs = { mdStatus: rawBody.MdStatus ?? mdStatus, paresStatus, eci, cavv };
-      const matched = amountCandidates.some((amount) =>
-        currencyCandidates.some(
-          (currencyCode) =>
-            calculateMpiHash({
-              verifyEnrollmentRequestId: transaction.mpiTransactionId ?? transactionId,
-              merchantId: this.mpi.getMerchantId(),
-              currencyCode,
-              amount,
-              ...hashInputs,
-              mpiPassword: this.mpi.getMpiPassword(),
-            }) === incomingHash,
-        ),
-      );
-      if (!matched) {
-        const sanitized = Object.fromEntries(
-          Object.entries(rawBody).map(([k, v]) =>
-            /pan|card/i.test(k) ? [k, "***"] : [k, v],
-          ),
-        );
-        this.logger.warn(
-          `3D callback hash mismatch (opsiyonel kontrol, doküman 5.8). received=${incomingHash} body=${JSON.stringify(sanitized)}`,
-        );
-        // Doküman 5.8: bu hash ZORUNLU değil, ek bütünlük kontrolü ("hesaplanabilmektedir").
-        // Bankanın gerçek algoritması dokümandan sapıyor ve üretilemedi; asıl finansal
-        // güvence VPos provizyonundaki bağımsız ECI/CAVV doğrulaması + AMOUNT_MISMATCH kontrolü.
-        // Formül netleşince ZIRAAT_3D_HASH_ENFORCE=true ile tekrar bloklayıcı yapılabilir.
-        const enforce = this.config.get("ZIRAAT_3D_HASH_ENFORCE", "false") === "true";
-        if (enforce) {
-          return redirectFail(
-            await this.failTransaction({
-              transactionId: transaction.id,
-              contractId: transaction.contractId,
-              reasonCode: "HASH_MISMATCH",
-              customerCode: "SECURITY_CHECK_FAILED",
-              fields: { mdStatus, paresStatus, eci, cavv },
-              meta: { receivedHash: incomingHash },
-            }),
-          );
-        }
-      }
-    }
-
-    // Doküman bölüm 5.7: Y ve A başarılı; N durdurulur; U bankaya göre değişir
-    if (paresStatus !== "Y" && paresStatus !== "A") {
-      return redirectFail(
-        await this.failTransaction({
-          transactionId: transaction.id,
-          contractId: transaction.contractId,
-          reasonCode: `3D_FAILED_${paresStatus || mdStatus}`,
-          customerCode: "THREE_D_FAILED",
-          fields: { mdStatus, paresStatus, eci, cavv },
-        }),
-      );
-    }
-
-    let pan = "";
-    let expiryYYMM = "";
-    if (transaction.cardToken) {
-      try {
-        const card = decryptCardToken(transaction.cardToken, this.cardSecret);
-        pan = card.pan;
-        expiryYYMM = card.expiry;
-      } catch {
-        return redirectFail(
-          await this.failTransaction({
-            transactionId: transaction.id,
-            contractId: transaction.contractId,
-            reasonCode: "CARD_TOKEN_ERROR",
-            customerCode: "SESSION_EXPIRED",
-            fields: { mdStatus, paresStatus, eci, cavv },
-          }),
-        );
-      }
-    }
-
-    // Doküman 5.7: Mastercard + Status A → CAVV gönderilmemelidir
-    const vposCavv = detectBrand(pan) === "MC" && paresStatus === "A" ? "" : cavv;
-
-    const vposResult = await this.vpos.processPayment({
-      pan,
-      expiryYYMM,
-      amountCents: bankAmountCents,
-      eci,
-      cavv: vposCavv,
-      mpiTransactionId: transaction.mpiTransactionId ?? transactionId,
-      clientIp,
-      posTransactionId: transaction.id,
-      contractId: transaction.contractId,
-    });
-
-    if (vposResult.approved) {
-      await this.allocateAndComplete(
-        transaction.id,
-        transaction.contractId,
-        transaction.amountCents,
-        transaction.installmentIds,
-        vposResult.hostReference ?? "",
-        { mdStatus, paresStatus, eci, cavv, vposReference: vposResult.hostReference },
-      );
-      this.sendPaymentNotifications(transaction.id, transaction.contractId, transaction.amountCents).catch(() => {});
-      // hostReference boş string dönebilir; ?? yerine || ile transaction.id'ye düş
-      return redirectOk(vposResult.hostReference || transaction.id);
-    } else {
-      return redirectFail(
-        await this.failTransaction({
-          transactionId: transaction.id,
-          contractId: transaction.contractId,
-          reasonCode: "VPOS_DECLINED_3D",
-          customerCode: "CARD_DECLINED",
-          fields: { mdStatus, paresStatus, eci, cavv },
-          meta: {
-            bankResponseCode: vposResult.responseCode,
-            bankResponseText: vposResult.responseText,
-          },
-        }),
-      );
-    }
-  }
+  // Kartlı ödeme uçları (payment-3d-init, 3d-callback) 24.11.2026'da kaldırıldı.
+  // PayFlex MPI + VPos modelinde kart numarası sunucumuzdan geçiyor ve 3D dönüşüne
+  // kadar saklanıyordu (PCI DSS SAQ D); kart 3D'ye kayıtlı değilse 3D'siz çekim de
+  // yapılıyordu. Artık hiçbir uç kart bilgisi kabul etmez. Online ödeme, kartın
+  // bankanın sayfasında girildiği PayFlex Ortak Ödeme Sayfası ile yeniden açılacak;
+  // kur (payment-quote), taksit eşleştirme ve bildirim yardımcıları onun için korunuyor.
 
   // ─── Yardımcı metodlar ───────────────────────────────────────────────────────
 
